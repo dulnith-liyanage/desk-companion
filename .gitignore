@@ -1,0 +1,13 @@
+# Ignore Python virtual environment
+companion/venv/
+__pycache__/
+*.pyc
+
+# Ignore Arduino build artifacts
+build/
+*.elf
+*.bin
+*.hex
+
+# macOS specific
+.DS_Store
