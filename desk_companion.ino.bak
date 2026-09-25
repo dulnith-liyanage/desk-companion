@@ -1,0 +1,507 @@
+/*
+  Desk Companion - Refined WiFi + Haptics (Vibration fix)
+*/
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <U8g2lib.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+
+// ======================= HARDWARE CONFIG =======================
+#define USE_SH1106 0          
+const int PIN_SDA   = 8;
+const int PIN_SCL   = 9;
+const int PIN_TOUCH = 7;
+const int PIN_BUZZER = 5;
+const int PIN_VIBE   = 10;
+// ===============================================================
+
+#if USE_SH1106
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+#else
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+#endif
+
+WebServer server(80);
+Preferences prefs;
+
+enum Expr : uint8_t {
+  E_NEUTRAL, E_HAPPY, E_SAD, E_ANGRY, E_SLEEPY, E_SURPRISED, E_LOVE,
+  E_WINK, E_SKEPTICAL, E_SHY, E_COOL, E_ATTENTIVE, E_MUSIC, E_SLEEP,
+  E_DETERMINED, E_PLEADING,
+  E_COUNT
+};
+
+const char* EXPR_NAMES[E_COUNT] = {
+  "Neutral", "Happy", "Sad", "Angry", "Sleepy", "Surprised", "Love",
+  "Wink", "Skeptical", "Shy", "Cool", "Attentive", "Music", "Sleep",
+  "Determined", "Pleading"
+};
+
+struct Face { float w, h, tilt, happy, lid, love, closed, wink, squint; };
+
+const Face PRESETS[E_COUNT] = {
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0   },  // neutral
+  { 30,  28,    0,     1,     0,     0,    0,    0,    0   },  // happy
+  { 30,  26,   -1,     0,     0,     0,    0,    0,    0   },  // sad
+  { 30,  26,    1,     0,     0,     0,    0,    0,    0   },  // angry
+  { 30,  28,    0,     0,  0.55f,    0,    0,    0,    0   },  // sleepy
+  { 36,  36,    0,     0,     0,     0,    0,    0,    0   },  // surprised
+  { 30,  28,    0,     0,     0,     1,    0,    0,    0   },  // love
+  { 30,  28,    0,  0.5f,     0,     0,    0,    1,    0   },  // wink
+  { 32,  28, 0.4f,     0,     0,     0,    0, 0.4f,    0   },  // skeptical
+  { 22,  20,    0,     0,     0,     0,    0,    0,    0   },  // shy
+  { 30,  14,    0,  0.3f,     0,     0,    0,    0,    1   },  // cool
+  { 18,  42,    0,     0,     0,     0,    0,    0,    0   },  // attentive
+  { 30,  28,    0,  0.7f,     0,     0,    0,    0,    0   },  // music
+  { 30,  28,    0,     0,     0,     0,    1,    0,    0   },  // sleeping
+  { 28,  18, 0.8f,     0,     0,     0,    0,    0, 0.5f },  // determined
+  { 38,  34,-0.4f,  0.6f,     0,     0,    0,    0,    0   },  // pleading
+};
+
+// State
+Expr     curExpr = E_NEUTRAL;
+uint32_t exprUntil = 0, nextMoodAt = 0;
+Face     cur, tgt;
+float    lookX = 0, lookY = 0, lookTX = 0, lookTY = 0;
+uint32_t nextLookAt = 0, blinkStart = 0, nextBlinkAt = 0;
+uint32_t lastFrame = 0, prevUpdateTime = 0;
+
+bool     sleeping = false;
+bool     autoMood = false;
+uint32_t lastTouchAt = 0;
+uint32_t vibeUntil = 0;
+
+const uint32_t FRAME_MS = 40;  // ~25 FPS
+
+// ---------------------------------- helpers ----------------------------------
+void centerStr(const char* s, int y) {
+  int x = (128 - u8g2.getUTF8Width(s)) / 2;
+  if (x < 0) x = 0;
+  u8g2.drawUTF8(x, y, s);
+}
+
+void bootText(const char* a, const char* b = "", const char* c = "") {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x12_tf);
+  centerStr(a, 20);
+  centerStr(b, 36);
+  centerStr(c, 52);
+  u8g2.sendBuffer();
+}
+
+void setExpr(Expr e, uint32_t holdMs = 0) {
+  curExpr = e;
+  tgt = PRESETS[e];
+  exprUntil = holdMs ? millis() + holdMs : 0;
+}
+
+// ---------------------------------- web server ----------------------------------
+void handleRoot() {
+  String html = "<html><head><title>Desk Companion</title>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+  html += "<style>";
+  html += "body { font-family: sans-serif; text-align: center; margin: 0; padding: 20px; background: #222; color: #fff; }";
+  html += "h1 { margin-bottom: 20px; }";
+  html += ".grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-top: 20px; }";
+  html += ".btn { padding: 15px 10px; background: #444; color: white; text-decoration: none; border-radius: 8px; font-size: 16px; border: 1px solid #555; }";
+  html += ".btn:active { background: #666; }";
+  html += ".toggle { display: block; margin: 20px auto; padding: 15px; background: " + String(autoMood ? "#2a2" : "#a22") + "; color: white; text-decoration: none; border-radius: 8px; font-size: 18px; max-width: 250px; }";
+  html += "</style></head><body>";
+  html += "<h1>Desk Companion</h1>";
+  
+  html += "<a class='toggle' href='/toggleMood'>Auto Mood: " + String(autoMood ? "ON" : "OFF") + "</a>";
+  
+  html += "<h3>Set Expression</h3>";
+  html += "<div class='grid'>";
+  for (int i = 0; i < E_COUNT; i++) {
+    html += "<a class='btn' href='/set?e=" + String(i) + "'>" + String(EXPR_NAMES[i]) + "</a>";
+  }
+  html += "</div>";
+  
+  html += "</body></html>";
+  server.send(200, "text/html", html);
+}
+
+void handleSetExpr() {
+  if (server.hasArg("e")) {
+    int e = server.arg("e").toInt();
+    if (e >= 0 && e < E_COUNT) {
+      setExpr((Expr)e, 10000); 
+      nextMoodAt = millis() + 10000;
+      tone(PIN_BUZZER, 1000, 50);
+      digitalWrite(PIN_VIBE, HIGH);
+      vibeUntil = millis() + 150; // Increased vibration for web interaction
+    }
+  }
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void handleToggleMood() {
+  autoMood = !autoMood;
+  prefs.putBool("autoMood", autoMood);
+  tone(PIN_BUZZER, autoMood ? 1200 : 800, 50); 
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+// ---------------------------------- drawing ----------------------------------
+void drawHeart(int cx, int cy, int s) {
+  u8g2.drawDisc(cx - s / 2, cy - s / 3, s / 2 + 1);
+  u8g2.drawDisc(cx + s / 2, cy - s / 3, s / 2 + 1);
+  u8g2.drawTriangle(cx - s - 1, cy - s / 3 + 2, cx + s + 1, cy - s / 3 + 2, cx, cy + s);
+}
+
+void drawEye(int x, int y, int w, int h, bool left) {
+  if (cur.squint > 0.02f) {
+    int sq = (int)(cur.squint * h * 0.5f);
+    h -= sq;
+    y += sq / 2;
+    if (h < 4) h = 4;
+  }
+  if (left && cur.wink > 0.02f) {
+    int wr = (int)(cur.wink * h * 0.9f);
+    h -= wr;
+    y += wr / 2;
+    if (h < 3) { u8g2.drawRBox(x, y + h / 2 - 1, w, 3, 1); return; }
+  }
+  int r = h / 2;
+  if (r > w / 2) r = w / 2;
+  if (r > 10) r = 10;
+  u8g2.setDrawColor(1);
+  if (r > 0) u8g2.drawRBox(x, y, w, h, r);
+  else       u8g2.drawBox(x, y, w, h);
+  u8g2.setDrawColor(0);
+
+  if (cur.tilt > 0.05f) {
+    int d = (int)(cur.tilt * h * 0.55f);
+    if (left) u8g2.drawTriangle(x - 1, y - 1, x + w + 1, y - 1, x + w + 1, y + d);
+    else      u8g2.drawTriangle(x - 1, y - 1, x + w + 1, y - 1, x - 1, y + d);
+  } else if (cur.tilt < -0.05f) {
+    int d = (int)(-cur.tilt * h * 0.55f);
+    if (left) u8g2.drawTriangle(x - 1, y - 1, x + w + 1, y - 1, x - 1, y + d);
+    else      u8g2.drawTriangle(x - 1, y - 1, x + w + 1, y - 1, x + w + 1, y + d);
+  }
+  if (cur.lid > 0.02f) u8g2.drawBox(x - 1, y - 1, w + 2, (int)(cur.lid * h) + 1);
+  if (cur.happy > 0.02f) {
+    int rr = (int)(w * 0.6f);
+    int cy = (int)((y + h + rr) - cur.happy * (rr + h * 0.15f));
+    u8g2.drawDisc(x + w / 2, cy, rr);
+    if (cy < y + h) u8g2.drawBox(x - 2, cy, w + 4, y + h - cy + 2);
+  }
+  u8g2.setDrawColor(1);
+}
+
+float blinkScale() {
+  uint32_t d = millis() - blinkStart;
+  if (d >= 180) return 1.0f;
+  return 1.0f - 0.92f * sinf(PI * d / 180.0f);
+}
+
+void renderFace() {
+  int w = (int)cur.w;
+  int gap = 14;
+  int lx = 64 - gap / 2 - w + (int)lookX;
+  int rx = 64 + gap / 2 + (int)lookX;
+  bool canBlink = cur.closed < 0.5f && cur.love < 0.5f;
+  int h = canBlink ? (int)(cur.h * blinkScale()) : (int)cur.h;
+  if (h < 2) h = 2;
+  int y = 32 - h / 2 + (int)lookY;
+
+  if (cur.closed > 0.5f) {
+    u8g2.drawRBox(lx, 32, w, 3, 1);
+    u8g2.drawRBox(rx, 32, w, 3, 1);
+    u8g2.setFont(u8g2_font_6x12_tf);
+    int zOffset = (int)(2.5f * sinf(millis() / 400.0f));
+    u8g2.drawStr(100, 20 + zOffset, "z");
+    u8g2.drawStr(108, 11 - zOffset, "Z");
+  } else if (cur.love > 0.5f) {
+    int s = 9 + (int)(2 * sinf(millis() / 110.0f));
+    drawHeart(lx + w / 2, 32, s);
+    drawHeart(rx + w / 2, 32, s);
+  } else {
+    drawEye(lx, y, w, h, true);
+    drawEye(rx, y, w, h, false);
+  }
+}
+
+// ---------------------------------- animation update ----------------------------------
+void wake() {
+  lastTouchAt = millis();
+  if (sleeping) { 
+    sleeping = false; 
+    u8g2.setPowerSave(0); 
+    setExpr(E_SURPRISED, 1500); 
+    tone(PIN_BUZZER, 1200, 100); 
+  }
+}
+
+void updateFace(uint32_t now) {
+  float dt = (now - prevUpdateTime) / 1000.0f;
+  prevUpdateTime = now;
+  if (dt > 0.15f) dt = 0.15f;
+  if (dt < 0.001f) dt = 0.001f;
+
+  float alpha = 1.0f - powf(0.72f, dt * 25.0f);
+  auto tween = [alpha](float& a, float b) { a += (b - a) * alpha; };
+  tween(cur.w, tgt.w);         tween(cur.h, tgt.h);
+  tween(cur.tilt, tgt.tilt);   tween(cur.happy, tgt.happy);
+  tween(cur.lid, tgt.lid);     tween(cur.love, tgt.love);
+  tween(cur.closed, tgt.closed);
+  tween(cur.wink, tgt.wink);   tween(cur.squint, tgt.squint);
+
+  if (now > nextLookAt) {
+    lookTX = random(-8, 9);
+    lookTY = random(-4, 5);
+    nextLookAt = now + random(1200, 4000);
+  }
+  float lookGain = (cur.closed < 0.5f && cur.love < 0.5f) ? 1.0f : 0.0f;
+  float lookAlpha = 1.0f - powf(0.75f, dt * 25.0f);
+  lookX += (lookTX * lookGain - lookX) * lookAlpha;
+  lookY += (lookTY * lookGain - lookY) * lookAlpha;
+
+  if (now > nextBlinkAt) {
+    blinkStart = now;
+    nextBlinkAt = now + random(2000, 6000);
+  }
+
+  // 1. Idle Auto-Sleep
+  uint32_t idleTime = now - lastTouchAt;
+  if (idleTime > 300000) { 
+    if (!sleeping) {
+      sleeping = true;
+      setExpr(E_SLEEP);
+      u8g2.setPowerSave(0);
+      tone(PIN_BUZZER, 600, 150); 
+    } else if (idleTime > 600000) { 
+      u8g2.setPowerSave(1);
+    }
+  }
+
+  // 2. Clear hold expression
+  if (exprUntil && now > exprUntil) {
+    exprUntil = 0;
+    setExpr(E_NEUTRAL);
+  }
+
+  // 3. Normal random emotion cycle (if enabled)
+  if (!sleeping && autoMood && (!exprUntil || now > exprUntil)) {
+    if (now > nextMoodAt) {
+      // Intentionally exclude LOVE from the random cycle!
+      static const Expr moods[] = {
+        E_NEUTRAL, E_HAPPY, E_SAD, E_ANGRY, E_SLEEPY, E_SURPRISED,
+        E_WINK, E_SKEPTICAL, E_SHY, E_COOL, E_DETERMINED, E_PLEADING
+      };
+      setExpr(moods[random(0, 12)], 0);
+      nextMoodAt = now + random(5000, 12000);
+    }
+  } else if (!sleeping && !autoMood && (!exprUntil || now > exprUntil)) {
+    if (curExpr != E_NEUTRAL) setExpr(E_NEUTRAL);
+  }
+}
+
+void render() {
+  u8g2.clearBuffer();
+  u8g2.setDrawColor(1);
+  renderFace();
+  u8g2.sendBuffer();
+}
+
+// ---------------------------------- touch ----------------------------------
+void onTap() {
+  // Instead of cycling through all emotions, a tap just elicits a cute reaction
+  static const Expr reactions[] = { E_HAPPY, E_WINK, E_COOL, E_SHY, E_SURPRISED, E_PLEADING };
+  setExpr(reactions[random(0, 6)], 3000); 
+}
+
+void onDoubleTap() {
+  autoMood = !autoMood;
+  prefs.putBool("autoMood", autoMood);
+  setExpr(autoMood ? E_SURPRISED : E_SLEEPY, 1500); 
+  tone(PIN_BUZZER, 1500, 80);
+  
+  // Strong double haptic
+  digitalWrite(PIN_VIBE, HIGH);
+  vibeUntil = millis() + 150; 
+}
+
+void onLongPress() {
+  // Love is now strictly reserved for long press
+  setExpr(E_LOVE, 4000);
+  tone(PIN_BUZZER, 800, 200);
+  digitalWrite(PIN_VIBE, HIGH);
+  vibeUntil = millis() + 300; // Very long purr for Love
+}
+
+void handleTouch() {
+  static uint32_t pressTime = 0, releaseTime = 0;
+  static bool isPressed = false;
+  static int tapCount = 0;
+  static bool longPressHandled = false;
+  static bool isLoving = false; // Tracks if we are currently holding love
+
+  static bool stableState = false;
+  static uint32_t stateChangeTime = 0;
+  
+  bool rawState = digitalRead(PIN_TOUCH) == HIGH;
+  uint32_t now = millis();
+
+  if (rawState != stableState) {
+    if (now - stateChangeTime > 20) { 
+      stableState = rawState;
+      
+      if (stableState) { 
+        isPressed = true;
+        pressTime = now;
+        longPressHandled = false;
+        wake();
+        
+        digitalWrite(PIN_VIBE, HIGH);
+        vibeUntil = now + 120; 
+        tone(PIN_BUZZER, 1000, 15);
+      } else { 
+        isPressed = false;
+        releaseTime = now;
+        
+        // If we were holding down for love, stop it immediately!
+        if (isLoving) {
+          isLoving = false;
+          setExpr(E_NEUTRAL);
+        } else if (!longPressHandled) {
+          tapCount++;
+        }
+      }
+    }
+  } else {
+    stateChangeTime = now;
+  }
+
+  // Long press -> hold to love
+  if (isPressed && !longPressHandled && (now - pressTime > 1200)) {
+    longPressHandled = true;
+    isLoving = true;
+    setExpr(E_LOVE, 30000); // Hold for up to 30s while pressed until explicitly cleared on release
+    tone(PIN_BUZZER, 800, 200);
+    digitalWrite(PIN_VIBE, HIGH);
+    vibeUntil = now + 300; // Strong purr
+  }
+
+  // Execute taps 350ms after the last release
+  if (!isPressed && tapCount > 0 && (now - releaseTime > 350)) {
+    if (tapCount == 1) onTap();
+    else if (tapCount >= 2) onDoubleTap();
+    tapCount = 0;
+  }
+}
+
+// ---------------------------------- Arduino entry points ----------------------------------
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_TOUCH, INPUT_PULLDOWN);
+  pinMode(PIN_BUZZER, OUTPUT);
+  pinMode(PIN_VIBE, OUTPUT);
+  digitalWrite(PIN_VIBE, LOW);
+  
+  randomSeed(esp_random());
+
+  prefs.begin("deskcomp", false);
+  autoMood = prefs.getBool("autoMood", false); 
+
+  Wire.setPins(PIN_SDA, PIN_SCL);
+  u8g2.begin();
+  u8g2.setBusClock(400000);
+
+  // VIBRATION HARDWARE TEST
+  bootText("Hardware Test", "Testing Motor...", "You should feel 3 pulses");
+  for (int i=0; i<3; i++) {
+    digitalWrite(PIN_VIBE, HIGH);
+    tone(PIN_BUZZER, 600, 50);
+    delay(300);
+    digitalWrite(PIN_VIBE, LOW);
+    delay(300);
+  }
+
+  // Connection Logic
+  WiFi.disconnect(true, true);
+  delay(1000);
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname("YetiCompanion"); 
+  
+  struct Network { const char* ssid; const char* pass; };
+  Network networks[] = {
+    {"Dulnith's Iphone", "dulnith2005"},
+    {"Dulnith’s Iphone", "dulnith2005"},
+    {"Dulnith's iPhone", "dulnith2005"},
+    {"Dulnith’s iPhone", "dulnith2005"}
+  };
+
+  bool connected = false;
+  for (int i = 0; i < 4; i++) {
+    bootText("Connecting to", networks[i].ssid, "");
+    WiFi.begin(networks[i].ssid, networks[i].pass);
+    
+    int attempts = 0;
+    while(WiFi.status() != WL_CONNECTED && attempts < 25) { // Wait 12.5s per network
+      delay(500);
+      attempts++;
+    }
+
+    if(WiFi.status() == WL_CONNECTED) {
+      connected = true;
+      break;
+    }
+
+    bootText("Failed", "Trying next...", "");
+    WiFi.disconnect(true, true);
+    delay(500);
+  }
+
+  if (connected) {
+    bootText("Connected!", "Dashboard IP:", WiFi.localIP().toString().c_str());
+    server.on("/", handleRoot);
+    server.on("/set", handleSetExpr);
+    server.on("/toggleMood", handleToggleMood);
+    server.begin();
+  } else {
+    bootText("All WiFi Failed", "Running in", "Offline Mode");
+  }
+
+  delay(4000); 
+
+  cur = PRESETS[E_SLEEP];
+  tgt = PRESETS[E_NEUTRAL];
+
+  uint32_t now = millis();
+  nextMoodAt    = now + 10000;
+  lastTouchAt   = now;
+  lastFrame     = now;
+  prevUpdateTime = now;
+  setExpr(E_NEUTRAL);
+}
+
+void loop() {
+  server.handleClient();
+  handleTouch();
+  uint32_t now = millis();
+  
+  if (vibeUntil && now > vibeUntil) {
+    digitalWrite(PIN_VIBE, LOW);
+    vibeUntil = 0;
+  }
+  
+  if (now - lastFrame >= FRAME_MS) {
+    lastFrame += FRAME_MS;
+    if (now - lastFrame > FRAME_MS * 3) lastFrame = now;
+    
+    updateFace(now);
+    
+    if (!sleeping || (now - lastTouchAt <= 600000)) {
+      render();
+    } else {
+      delay(20);
+    }
+  }
+}
