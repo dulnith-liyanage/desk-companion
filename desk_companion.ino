@@ -1,8 +1,5 @@
 /*
-  Desk Companion - Ultra Cute Expressions Update
-  - Added Asymmetry for Curious/Confused expressions
-  - Added dynamic trembling for Frustrated and bouncing for Excited
-  - Removed Love from single tap
+  Desk Companion - Flappy Yeti & Secret Message Edition
 */
 
 #include <Arduino.h>
@@ -19,6 +16,9 @@ const int PIN_VIBE   = 10;
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 Preferences prefs;
 
+enum SystemMode { MODE_NORMAL, MODE_MESSAGE, MODE_GAME };
+SystemMode curMode = MODE_NORMAL;
+
 // ==============================================================================
 // CORE SYSTEMS & CONSTANTS
 // ==============================================================================
@@ -30,11 +30,11 @@ enum Expr : uint8_t {
 
 struct Face { float w, h, tilt, happy, lid, love, closed, wink, squint, asym; };
 const Face PRESETS[E_COUNT] = {
-  { 30,  28,    0,     0,     0,     0,    0,    0,    0,    0 },  // neutral
-  { 34,  32,    0,  0.8f,     0,     0,    0,    0,    0,    0 },  // happy (thick arches)
-  { 34,  28,-0.4f,     0,     0,     0,    0,    0,    0,    0 },  // sad (puppy tilt)
-  { 32,  24, 0.6f,     0,  0.3f,     0,    0,    0,    0,    0 },  // angry (fierce but cute pout)
-  { 38,  16, 0.8f,     0,     0,     0,    0,    0, 0.5f,    0 },  // frustrated (squished, heavy tilt)
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0,    0 },  // neutral (Classic)
+  { 34,  32,    0,  0.8f,     0,     0,    0,    0,    0,    0 },  // happy 
+  { 34,  28,-0.4f,     0,     0,     0,    0,    0,    0,    0 },  // sad 
+  { 32,  24, 0.6f,     0,  0.3f,     0,    0,    0,    0,    0 },  // angry 
+  { 38,  16, 0.8f,     0,     0,     0,    0,    0, 0.5f,    0 },  // frustrated 
   { 34,  30,    0,     0,  0.6f,     0,    0,    0,    0,    0 },  // sleepy
   { 40,  38,    0,     0,     0,     0,    0,    0,    0,    0 },  // surprised
   { 34,  30,    0,     0,     0,  1.0f,    0,    0,    0,    0 },  // love
@@ -47,8 +47,8 @@ const Face PRESETS[E_COUNT] = {
   { 34,  30,    0,     0,     0,     0,  1.0f,   0,    0,    0 },  // sleeping
   { 30,  20, 0.6f,     0,     0,     0,    0,    0, 0.3f,    0 },  // determined
   { 38,  34,-0.3f,  0.5f,     0,     0,    0,    0,    0,    0 },  // pleading
-  { 34,  34,    0,     0,     0,     0,    0,    0,    0, 0.35f},  // curious (asymmetrical!)
-  { 38,  38,    0,  0.4f,     0,     0,    0,    0,    0,    0 },  // excited (big bouncy)
+  { 34,  34,    0,     0,     0,     0,    0,    0,    0, 0.35f},  // curious 
+  { 38,  38,    0,  0.4f,     0,     0,    0,    0,    0,    0 },  // excited 
 };
 
 Expr     curExpr = E_NEUTRAL;
@@ -96,6 +96,7 @@ Note sfxHum[]      = {{600, 200}, {650, 200}, {800, 400}, {0, 100}, {650, 400}};
 Note sfxSneeze[]   = {{2000, 80}, {1500, 100}};
 Note sfxPet[]      = {{1500, 50}};
 Note sfxLove[]     = {{800, 100}, {1200, 100}, {1600, 200}};
+Note sfxPoint[]    = {{1200, 50}, {1800, 80}};
 
 // ==============================================================================
 // PREMIUM HAPTIC ENGINE
@@ -129,7 +130,7 @@ void updateVibe(uint32_t now) {
 }
 
 // ==============================================================================
-// TAMAGOTCHI MECHANICS
+// TAMAGOTCHI & NORMAL GRAPHICS
 // ==============================================================================
 bool isFocusMode = false;
 uint32_t focusStartTime = 0;
@@ -151,9 +152,6 @@ void wake() {
   }
 }
 
-// ==============================================================================
-// GRAPHICS & ANIMATION
-// ==============================================================================
 void drawHeart(int cx, int cy, int s) {
   u8g2.drawDisc(cx - s / 2, cy - s / 3, s / 2 + 1);
   u8g2.drawDisc(cx + s / 2, cy - s / 3, s / 2 + 1);
@@ -203,8 +201,7 @@ float blinkScale() {
   return 1.0f - 0.92f * sinf(PI * d / 180.0f);
 }
 
-void renderFace(uint32_t now) {
-  // Asymmetry Math (Curious/Confused)
+void renderNormal(uint32_t now) {
   int wL = (int)(cur.w * (1.0f + cur.asym));
   int wR = (int)(cur.w * (1.0f - cur.asym));
   int hL = (int)(cur.h * (1.0f + cur.asym));
@@ -214,7 +211,6 @@ void renderFace(uint32_t now) {
   int lx = 64 - gap / 2 - wL + (int)lookX;
   int rx = 64 + gap / 2 + (int)lookX;
   
-  // Dynamic shaking/trembling for Sneeze and Frustrated
   if (sneezeState == 1 || curExpr == E_FRUSTRATED) {
     int shake = (now / 20) % 2 == 0 ? 3 : -3;
     lx += shake; rx += shake;
@@ -229,7 +225,6 @@ void renderFace(uint32_t now) {
   int yL = 32 - curHL / 2 + (int)lookY;
   int yR = 32 - curHR / 2 + (int)lookY;
 
-  // Dynamic bouncing for Excited
   if (curExpr == E_EXCITED) {
      int bounce = (int)(abs(sin(now / 80.0f)) * 6.0f);
      yL -= bounce; yR -= bounce;
@@ -247,7 +242,7 @@ void renderFace(uint32_t now) {
     u8g2.drawStr(105, 18 + z2, "Z");
     u8g2.drawStr(115,  8 + z3, "z");
   } else if (cur.love > 0.5f) {
-    int s = 18 + (int)(3 * sinf(now / 110.0f)); // Huge lovely hearts
+    int s = 18 + (int)(3 * sinf(now / 110.0f));
     drawHeart(lx + wL / 2, 32 + (int)lookY, s);
     drawHeart(rx + wR / 2, 32 + (int)lookY, s);
   } else {
@@ -265,7 +260,7 @@ void renderFace(uint32_t now) {
   }
 }
 
-void updateEngine(uint32_t now) {
+void updateNormal(uint32_t now) {
   float dt = (now - prevUpdateTime) / 1000.0f;
   prevUpdateTime = now;
   if (dt > 0.15f) dt = 0.15f; if (dt < 0.001f) dt = 0.001f;
@@ -330,7 +325,7 @@ void updateEngine(uint32_t now) {
       } else if (r < 25) {
         setExpr(E_MUSIC, 4000); playMelody(sfxHum, 5);
       } else if (r < 30) {
-        setExpr(E_CURIOUS, 3000); // Random head-tilt/curious look
+        setExpr(E_CURIOUS, 3000); 
       }
       lastIdleEventAt = now;
     }
@@ -338,26 +333,126 @@ void updateEngine(uint32_t now) {
 }
 
 // ==============================================================================
-// TOUCH INTERACTIONS
+// MESSAGE MODE
+// ==============================================================================
+uint32_t msgStart = 0;
+bool lovePlayed = false;
+
+void onTripleTap() {
+    curMode = MODE_MESSAGE;
+    msgStart = millis();
+    lovePlayed = false;
+    setVibe(V_PULSE_HARD, 100);
+}
+
+void updateMessage(uint32_t now) {
+    uint32_t t = now - msgStart;
+    if (t > 8000) {
+        curMode = MODE_NORMAL;
+        setExpr(E_NEUTRAL);
+    } else if (t > 5000 && !lovePlayed) {
+        lovePlayed = true;
+        setVibe(V_HEARTBEAT, 3000);
+        playMelody(sfxLove, 3);
+    }
+}
+
+void renderMessage(uint32_t now) {
+    uint32_t t = now - msgStart;
+    if (t < 1500) {
+        u8g2.setFont(u8g2_font_6x12_tf);
+        u8g2.drawStr(28, 35, "SYSTEM ERROR");
+    } else if (t < 3000) {
+        u8g2.setFont(u8g2_font_6x12_tf);
+        u8g2.drawStr(8, 35, "HEART.EXE CORRUPT");
+    } else if (t < 4000) {
+        for(int i=0; i<400; i++) u8g2.drawPixel(random(128), random(64));
+    } else if (t < 5000) {
+        // silence
+    } else {
+        u8g2.setFont(u8g2_font_8x13B_tf);
+        u8g2.drawStr(22, 25, "I LOVE YOU!");
+        int bounce = (int)(abs(sin(now / 150.0f)) * 5.0f);
+        drawHeart(64, 50 - bounce, 16); 
+    }
+}
+
+// ==============================================================================
+// GAME MODE (FLAPPY YETI)
+// ==============================================================================
+float gy = 32, gv = 0, px = 128, pg = 32;
+int gscore = 0, gstate = 0; 
+
+void onQuadTap() {
+    curMode = MODE_GAME;
+    gstate = 0;
+    setVibe(V_PULSE_SOFT, 100);
+}
+
+void onGamePress() {
+    if (gstate == 0) {
+        gstate = 1; gy = 32; gv = -3.5f; px = 128; gscore = 0; pg = random(20, 44);
+        playMelody(sfxPet, 1);
+    } else if (gstate == 1) {
+        gv = -3.5f; playMelody(sfxPet, 1); setVibe(V_PULSE_SOFT, 30);
+    } else if (gstate == 2) {
+        gstate = 0; 
+    }
+}
+
+void dieGame() {
+    gstate = 2; playMelody(sfxSneeze, 2); setVibe(V_PULSE_HARD, 300);
+}
+
+void updateGame(uint32_t now) {
+    if (gstate == 1) {
+        gv += 0.35f; gy += gv; px -= 2.8f; 
+        
+        if (px < -15) {
+            px = 128; pg = random(20, 44);
+            gscore++; playMelody(sfxPoint, 2); 
+        }
+        
+        if (gy > 58 || gy < -5) dieGame();
+        if (px < 34 && px + 12 > 24) { 
+            if (gy < pg - 14 || gy + 10 > pg + 14) dieGame();
+        }
+    }
+}
+
+void renderGame(uint32_t now) {
+    u8g2.setFont(u8g2_font_6x12_tf);
+    if (gstate == 0) {
+        u8g2.drawStr(28, 20, "FLAPPY YETI");
+        u8g2.drawStr(28, 40, "Tap to Jump");
+        u8g2.drawStr(12, 55, "(Long Hold to Exit)");
+    } else if (gstate == 1) {
+        // Cute mini yeti
+        u8g2.drawRBox(24, (int)gy, 10, 10, 2);
+        u8g2.setDrawColor(0);
+        u8g2.drawBox(26, (int)gy+2, 2, 3); u8g2.drawBox(30, (int)gy+2, 2, 3);
+        u8g2.setDrawColor(1);
+        
+        // Pipes
+        u8g2.drawBox((int)px, 0, 12, (int)pg - 14);
+        u8g2.drawBox((int)px, (int)pg + 14, 12, 64);
+        
+        u8g2.setCursor(2, 10); u8g2.print(gscore);
+    } else {
+        u8g2.drawStr(35, 30, "GAME OVER");
+        u8g2.setCursor(40, 45); u8g2.print("Score: "); u8g2.print(gscore);
+    }
+}
+
+// ==============================================================================
+// TOUCH LOGIC
 // ==============================================================================
 void onTap() {
-  if (isFocusMode) {
-    setExpr(E_SKEPTICAL, 1500); return;
-  }
-  
   happiness += 20.0f; if (happiness > 100.0f) happiness = 100.0f;
-
-  // ONLY CUTE EXPRESSIONS IN TAP ARRAY (Removed E_LOVE, Added E_ANGRY, E_FRUSTRATED, E_CURIOUS, E_EXCITED)
   static const Expr reactions[] = { E_HAPPY, E_WINK, E_COOL, E_SHY, E_SURPRISED, E_ANGRY, E_FRUSTRATED, E_CURIOUS, E_EXCITED };
-  static Expr lastReaction = E_NEUTRAL;
-  Expr nextReaction;
-  do {
-    nextReaction = reactions[random(0, 9)];
-  } while (nextReaction == lastReaction);
-  
-  lastReaction = nextReaction;
-  setExpr(nextReaction, 3000); 
-  
+  static Expr lastReaction = E_NEUTRAL; Expr nextReaction;
+  do { nextReaction = reactions[random(0, 9)]; } while (nextReaction == lastReaction);
+  lastReaction = nextReaction; setExpr(nextReaction, 3000); 
   playMelody(sfxPet, 1); setVibe(V_PURR, 300);
 }
 
@@ -376,7 +471,6 @@ void handleTouch() {
   static int tapCount = 0;
   static bool longPressHandled = false;
   static bool isLoving = false; 
-
   static bool stableState = false;
   static uint32_t stateChangeTime = 0;
   
@@ -387,13 +481,20 @@ void handleTouch() {
     if (now - stateChangeTime > 20) { 
       stableState = rawState;
       if (stableState) {
-        isPressed = true; pressTime = now; longPressHandled = false; wake(); setVibe(V_PULSE_SOFT, 40); 
+        isPressed = true; pressTime = now; longPressHandled = false; 
+        if (curMode == MODE_GAME) {
+            onGamePress();
+        } else {
+            wake(); setVibe(V_PULSE_SOFT, 40); 
+        }
       } else {
         isPressed = false; releaseTime = now;
-        if (isLoving) {
-          isLoving = false; setExpr(E_NEUTRAL); exprUntil = 0; setVibe(V_OFF);
-        } else if (!longPressHandled) {
-          tapCount++;
+        if (curMode != MODE_GAME) {
+            if (isLoving) {
+              isLoving = false; setExpr(E_NEUTRAL); exprUntil = 0; setVibe(V_OFF);
+            } else if (!longPressHandled) {
+              tapCount++;
+            }
         }
       }
     }
@@ -401,16 +502,23 @@ void handleTouch() {
     stateChangeTime = now;
   }
 
-  // HEART EYES EXCLUSIVE TO LONG HOLD
-  if (isPressed && !longPressHandled && !isFocusMode && (now - pressTime > 1200)) {
-    longPressHandled = true; isLoving = true; happiness = 100.0f;
-    setExpr(E_LOVE, 30000); setVibe(V_HEARTBEAT, 30000); playMelody(sfxLove, 3);
+  // Tap evaluation for Normal / Message modes
+  if (curMode != MODE_GAME && !isPressed && tapCount > 0 && (now - releaseTime > 400)) {
+    if (tapCount == 1) onTap();
+    else if (tapCount == 2) onDoubleTap();
+    else if (tapCount == 3) onTripleTap();
+    else if (tapCount >= 4) onQuadTap();
+    tapCount = 0;
   }
 
-  if (!isPressed && tapCount > 0 && (now - releaseTime > 350)) {
-    if (tapCount == 1) onTap();
-    else if (tapCount >= 2) onDoubleTap();
-    tapCount = 0;
+  // Long press handling
+  if (isPressed && !longPressHandled && (now - pressTime > 1200)) {
+    if (curMode == MODE_GAME) {
+       longPressHandled = true; curMode = MODE_NORMAL; playMelody(sfxFocusOff, 3); setVibe(V_PULSE_HARD, 200);
+    } else if (curMode == MODE_NORMAL && !isFocusMode) {
+       longPressHandled = true; isLoving = true; happiness = 100.0f;
+       setExpr(E_LOVE, 30000); setVibe(V_HEARTBEAT, 30000); playMelody(sfxLove, 3);
+    }
   }
 }
 
@@ -431,11 +539,22 @@ void setup() {
 void loop() {
   uint32_t now = millis();
   handleTouch(); updateVibe(now); updateMelody(now);
+  
   if (now - lastFrame >= FRAME_MS) {
     lastFrame += FRAME_MS; if (now - lastFrame > FRAME_MS * 3) lastFrame = now;
-    updateEngine(now);
-    if (!sleeping || (now - lastTouchAt <= 600000)) {
-      u8g2.clearBuffer(); u8g2.setDrawColor(1); renderFace(now); u8g2.sendBuffer();
+    
+    if (curMode == MODE_GAME) updateGame(now);
+    else if (curMode == MODE_MESSAGE) updateMessage(now);
+    else updateNormal(now);
+
+    if (!sleeping || (now - lastTouchAt <= 600000) || curMode != MODE_NORMAL) {
+      u8g2.clearBuffer(); u8g2.setDrawColor(1); 
+      
+      if (curMode == MODE_GAME) renderGame(now);
+      else if (curMode == MODE_MESSAGE) renderMessage(now);
+      else renderNormal(now);
+      
+      u8g2.sendBuffer();
     } else { delay(10); }
   }
 }
