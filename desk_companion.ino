@@ -298,15 +298,6 @@ void updateNormal(uint32_t now) {
   if (isFocusMode) {
     if (now - focusStartTime >= FOCUS_DUR) {
       isFocusMode = false; playMelody(sfxPomodoro, 5); setVibe(V_PULSE_HARD, 1000); setExpr(E_HAPPY, 5000);
-    } else {
-      // Dynamic Focus Expressions (Studying!)
-      if (!exprUntil || now > exprUntil) {
-         int r = random(100);
-         if (r < 20) setExpr(E_ATTENTIVE, 3000);
-         else if (r < 30) setExpr(E_SLEEPY, 1500); // Nodding off
-         else setExpr(E_DETERMINED, 5000); // Focused
-         exprUntil = now + random(3000, 7000);
-      }
     }
   } else {
     happiness -= dt * 0.15f; if (happiness < 0) happiness = 0;
@@ -334,7 +325,7 @@ void updateNormal(uint32_t now) {
 
   // DYNAMIC IDLE STATE (Now triggers much more frequently)
   if (!sleeping && !isFocusMode && (!exprUntil || now > exprUntil)) {
-    if (now - lastIdleEventAt > 8000) { // Every 8 seconds instead of 15
+    if (now - lastIdleEventAt > 12000) { // Every 12 seconds
       int r = random(100);
       if (r < 25) {
         setExpr(E_SKEPTICAL, 3000); sneezeState = 1; sneezeAt = now + 800; // Sneeze more common
