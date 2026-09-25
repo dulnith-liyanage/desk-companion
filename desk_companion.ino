@@ -9,7 +9,7 @@
 
 const int PIN_SDA   = 8;
 const int PIN_SCL   = 9;
-const int PIN_TOUCH = 21;
+const int PIN_TOUCH = 3;
 const int PIN_BUZZER = 5;
 const int PIN_VIBE   = 10;
 
