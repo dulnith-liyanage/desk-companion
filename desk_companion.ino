@@ -30,7 +30,7 @@ enum Expr : uint8_t {
 
 struct Face { float w, h, tilt, happy, lid, love, closed, wink, squint, asym; };
 const Face PRESETS[E_COUNT] = {
-  { 34,  30,    0,     0,     0,     0,    0,    0,    0,    0 },  // neutral
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0,    0 },  // neutral
   { 34,  32,    0,  0.8f,     0,     0,    0,    0,    0,    0 },  // happy (thick arches)
   { 34,  28,-0.4f,     0,     0,     0,    0,    0,    0,    0 },  // sad (puppy tilt)
   { 32,  24, 0.6f,     0,  0.3f,     0,    0,    0,    0,    0 },  // angry (fierce but cute pout)
@@ -170,9 +170,7 @@ void drawEye(int x, int y, int w, int h, bool left) {
     if (h < 4) { u8g2.drawRBox(x, y + h / 2 - 2, w, 4, 2); return; }
   }
   
-  int r = 14; 
-  if (r > w / 2) r = w / 2; 
-  if (r > h / 2) r = h / 2;
+  int r = h / 2; if (r > w / 2) r = w / 2; if (r > 10) r = 10;
   
   u8g2.setDrawColor(1);
   u8g2.drawRBox(x, y, w, h, r);
@@ -212,7 +210,7 @@ void renderFace(uint32_t now) {
   int hL = (int)(cur.h * (1.0f + cur.asym));
   int hR = (int)(cur.h * (1.0f - cur.asym));
 
-  int gap = 12; 
+  int gap = 14; 
   int lx = 64 - gap / 2 - wL + (int)lookX;
   int rx = 64 + gap / 2 + (int)lookX;
   
