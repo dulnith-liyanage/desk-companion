@@ -1,5 +1,5 @@
 /*
-  Desk Companion - Premium Offline Edition
+  Desk Companion - Premium Offline Edition (Touch Only)
   Features:
   - Non-blocking Animation Engine (Smooth 30fps)
   - Non-blocking Audio Melody System
