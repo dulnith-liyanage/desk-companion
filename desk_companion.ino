@@ -371,7 +371,14 @@ void onTap() {
   if (happiness > 100.0f) happiness = 100.0f;
 
   static const Expr reactions[] = { E_HAPPY, E_WINK, E_COOL, E_SHY, E_SURPRISED };
-  setExpr(reactions[random(0, 5)], 3000); 
+  static Expr lastReaction = E_NEUTRAL;
+  Expr nextReaction;
+  do {
+    nextReaction = reactions[random(0, 5)];
+  } while (nextReaction == lastReaction);
+  
+  lastReaction = nextReaction;
+  setExpr(nextReaction, 3000); 
   
   playMelody(sfxPet, 1);
   setVibe(V_PURR, 300); // Soft purr on pet
