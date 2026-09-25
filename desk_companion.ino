@@ -1,9 +1,9 @@
 /*
-  Desk Companion - Premium Offline Edition (Touch Only)
+  Desk Companion - Ultimate Visuals Edition
   Features:
+  - Complex Face Overrides (Monster, TV Static, Thug Life)
+  - Hollow Eyes with Pupils
   - Non-blocking Animation Engine (Smooth 30fps)
-  - Non-blocking Audio Melody System
-  - Advanced PWM Haptic Engine (Heartbeats, Breathing, Purring)
   - Tamagotchi Mechanics & Pomodoro Focus Mode
 */
 
@@ -27,31 +27,36 @@ Preferences prefs;
 enum Expr : uint8_t {
   E_NEUTRAL, E_HAPPY, E_SAD, E_ANGRY, E_SLEEPY, E_SURPRISED, E_LOVE,
   E_WINK, E_SKEPTICAL, E_SHY, E_COOL, E_ATTENTIVE, E_MUSIC, E_SLEEP,
-  E_DETERMINED, E_PLEADING, E_COUNT
+  E_DETERMINED, E_PLEADING, E_STATIC, E_MONSTER, E_THUG, E_HOLLOW, E_COUNT
 };
 
-struct Face { float w, h, tilt, happy, lid, love, closed, wink, squint; };
+struct Face { float w, h, tilt, happy, lid, love, closed, wink, squint; int special; };
 const Face PRESETS[E_COUNT] = {
-  { 30,  28,    0,     0,     0,     0,    0,    0,    0   },  // neutral
-  { 30,  28,    0,     1,     0,     0,    0,    0,    0   },  // happy
-  { 30,  26,   -1,     0,     0,     0,    0,    0,    0   },  // sad
-  { 30,  26,    1,     0,     0,     0,    0,    0,    0   },  // angry
-  { 30,  28,    0,     0,  0.55f,    0,    0,    0,    0   },  // sleepy
-  { 36,  36,    0,     0,     0,     0,    0,    0,    0   },  // surprised
-  { 30,  28,    0,     0,     0,     1,    0,    0,    0   },  // love
-  { 30,  28,    0,  0.5f,     0,     0,    0,    1,    0   },  // wink
-  { 32,  28, 0.4f,     0,     0,     0,    0, 0.4f,    0   },  // skeptical
-  { 22,  20,    0,     0,     0,     0,    0,    0,    0   },  // shy
-  { 30,  14,    0,  0.3f,     0,     0,    0,    0,    1   },  // cool
-  { 18,  42,    0,     0,     0,     0,    0,    0,    0   },  // attentive
-  { 30,  28,    0,  0.7f,     0,     0,    0,    0,    0   },  // music
-  { 30,  28,    0,     0,     0,     0,    1,    0,    0   },  // sleeping
-  { 28,  18, 0.8f,     0,     0,     0,    0,    0, 0.5f },  // determined
-  { 38,  34,-0.4f,  0.6f,     0,     0,    0,    0,    0   },  // pleading
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0,  0 },  // neutral
+  { 30,  28,    0,     1,     0,     0,    0,    0,    0,  0 },  // happy
+  { 30,  26,   -1,     0,     0,     0,    0,    0,    0,  0 },  // sad
+  { 30,  26,    1,     0,     0,     0,    0,    0,    0,  0 },  // angry
+  { 30,  28,    0,     0,  0.55f,    0,    0,    0,    0,  0 },  // sleepy
+  { 36,  36,    0,     0,     0,     0,    0,    0,    0,  0 },  // surprised
+  { 30,  28,    0,     0,     0,     1,    0,    0,    0,  0 },  // love
+  { 30,  28,    0,  0.5f,     0,     0,    0,    1,    0,  0 },  // wink
+  { 32,  28, 0.7f,     0,     0,     0,    0, 0.7f,    0,  0 },  // skeptical (heavily angled)
+  { 22,  20,    0,     0,     0,     0,    0,    0,    0,  0 },  // shy
+  { 30,  14,    0,  0.3f,     0,     0,    0,    0,    1,  0 },  // cool
+  { 18,  42,    0,     0,     0,     0,    0,    0,    0,  0 },  // attentive
+  { 30,  28,    0,  0.7f,     0,     0,    0,    0,    0,  0 },  // music
+  { 30,  28,    0,     0,     0,     0,    1,    0,    0,  0 },  // sleeping
+  { 28,  18, 0.8f,     0,     0,     0,    0,    0, 0.5f,  0 },  // determined
+  { 38,  34,-0.4f,  0.6f,     0,     0,    0,    0,    0,  0 },  // pleading
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0,  1 },  // static
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0,  2 },  // monster
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0,  3 },  // thug
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0,  4 },  // hollow
 };
 
 Expr     curExpr = E_NEUTRAL;
 uint32_t exprUntil = 0;
+uint32_t exprStartTime = 0;
 Face     cur, tgt;
 float    lookX = 0, lookY = 0, lookTX = 0, lookTY = 0;
 uint32_t nextLookAt = 0, blinkStart = 0, nextBlinkAt = 0;
@@ -62,7 +67,7 @@ uint32_t lastTouchAt = 0;
 const uint32_t FRAME_MS = 33; // Smooth 30 FPS
 
 // ==============================================================================
-// PREMIUM AUDIO ENGINE (Non-Blocking)
+// PREMIUM AUDIO ENGINE
 // ==============================================================================
 struct Note { int f; int d; };
 Note* curMelody = nullptr;
@@ -83,13 +88,12 @@ void updateMelody(uint32_t now) {
       int d = curMelody[melodyIdx].d;
       if (f > 0) tone(PIN_BUZZER, f, d);
       else noTone(PIN_BUZZER);
-      noteEndTime = now + d + 20; // 20ms articulation gap
+      noteEndTime = now + d + 20;
       melodyIdx++;
     }
   }
 }
 
-// Sound Library
 Note sfxFocusOn[]  = {{600, 100}, {800, 100}, {1200, 150}};
 Note sfxFocusOff[] = {{1200, 100}, {800, 100}, {600, 150}};
 Note sfxWake[]     = {{1000, 80}, {1500, 120}};
@@ -101,7 +105,7 @@ Note sfxPet[]      = {{1500, 50}};
 Note sfxLove[]     = {{800, 100}, {1200, 100}, {1600, 200}};
 
 // ==============================================================================
-// PREMIUM HAPTIC ENGINE (PWM)
+// PREMIUM HAPTIC ENGINE
 // ==============================================================================
 enum VibeState { V_OFF, V_PULSE_SOFT, V_PULSE_HARD, V_PURR, V_HEARTBEAT, V_BREATHE };
 VibeState curVibe = V_OFF;
@@ -141,17 +145,18 @@ void updateVibe(uint32_t now) {
 // ==============================================================================
 bool isFocusMode = false;
 uint32_t focusStartTime = 0;
-const uint32_t FOCUS_DUR = 25 * 60 * 1000; // 25 Min Pomodoro
+const uint32_t FOCUS_DUR = 25 * 60 * 1000;
 
-float happiness = 100.0f; // 0.0 to 100.0
+float happiness = 100.0f;
 uint32_t lastIdleEventAt = 0;
 
-// Non-blocking sneeze sequencer
 int sneezeState = 0; 
 uint32_t sneezeAt = 0;
 
 void setExpr(Expr e, uint32_t holdMs = 0) {
-  curExpr = e; tgt = PRESETS[e]; exprUntil = holdMs ? millis() + holdMs : 0;
+  curExpr = e; tgt = PRESETS[e]; 
+  exprUntil = holdMs ? millis() + holdMs : 0;
+  exprStartTime = millis();
 }
 
 void wake() {
@@ -174,7 +179,7 @@ void drawHeart(int cx, int cy, int s) {
   u8g2.drawTriangle(cx - s - 1, cy - s / 3 + 2, cx + s + 1, cy - s / 3 + 2, cx, cy + s);
 }
 
-void drawEye(int x, int y, int w, int h, bool left) {
+void drawEye(int x, int y, int w, int h, bool left, int special) {
   if (cur.squint > 0.02f) {
     int sq = (int)(cur.squint * h * 0.5f); h -= sq; y += sq / 2;
     if (h < 4) h = 4;
@@ -186,22 +191,31 @@ void drawEye(int x, int y, int w, int h, bool left) {
   int r = h / 2; if (r > w / 2) r = w / 2; if (r > 10) r = 10;
   
   u8g2.setDrawColor(1);
-  if (r > 0) u8g2.drawRBox(x, y, w, h, r);
-  else       u8g2.drawBox(x, y, w, h);
-  u8g2.setDrawColor(0);
+  if (special == 4) { // Hollow eyes
+    if (r > 0) u8g2.drawRFrame(x, y, w, h, r);
+    else       u8g2.drawFrame(x, y, w, h);
+    u8g2.drawBox(x + w/2 - 3, y + h/2 - 3, 6, 6); // Inner square pupil
+  } else {
+    if (r > 0) u8g2.drawRBox(x, y, w, h, r);
+    else       u8g2.drawBox(x, y, w, h);
+  }
+  u8g2.setDrawColor(0); // Masking color
 
+  // Tilt masking
   if (cur.tilt > 0.05f) {
     int d = (int)(cur.tilt * h * 0.55f);
-    if (left) u8g2.drawTriangle(x - 1, y - 1, x + w + 1, y - 1, x + w + 1, y + d);
-    else      u8g2.drawTriangle(x - 1, y - 1, x + w + 1, y - 1, x - 1, y + d);
+    if (left) u8g2.drawTriangle(x - 2, y - 2, x + w + 2, y - 2, x + w + 2, y + d);
+    else      u8g2.drawTriangle(x - 2, y - 2, x + w + 2, y - 2, x - 2, y + d);
   } else if (cur.tilt < -0.05f) {
     int d = (int)(-cur.tilt * h * 0.55f);
-    if (left) u8g2.drawTriangle(x - 1, y - 1, x + w + 1, y - 1, x - 1, y + d);
-    else      u8g2.drawTriangle(x - 1, y - 1, x + w + 1, y - 1, x + w + 1, y + d);
+    if (left) u8g2.drawTriangle(x - 2, y - 2, x + w + 2, y - 2, x - 2, y + d);
+    else      u8g2.drawTriangle(x - 2, y - 2, x + w + 2, y - 2, x + w + 2, y + d);
   }
   
-  if (cur.lid > 0.02f) u8g2.drawBox(x - 1, y - 1, w + 2, (int)(cur.lid * h) + 1);
+  // Lid masking
+  if (cur.lid > 0.02f) u8g2.drawBox(x - 2, y - 2, w + 4, (int)(cur.lid * h) + 2);
   
+  // Happy arc masking
   if (cur.happy > 0.02f) {
     int rr = (int)(w * 0.6f);
     int cy = (int)((y + h + rr) - cur.happy * (rr + h * 0.15f));
@@ -218,14 +232,41 @@ float blinkScale() {
 }
 
 void renderFace(uint32_t now) {
+  int special = tgt.special; // Snap special visual modes
+
+  // 1. TV STATIC MODE
+  if (special == 1) {
+    for(int i=0; i<400; i++) {
+      u8g2.drawPixel(random(128), random(64));
+    }
+    return;
+  }
+  
+  // 2. MONSTER MODE
+  if (special == 2) {
+    // Large mouth
+    u8g2.drawBox(20, 35, 88, 25);
+    u8g2.setDrawColor(0);
+    // Sharp teeth
+    for(int i=20; i<108; i+=12) {
+        u8g2.drawTriangle(i, 35, i+12, 35, i+6, 45); // top teeth
+        u8g2.drawTriangle(i, 60, i+12, 60, i+6, 50); // bottom teeth
+    }
+    u8g2.setDrawColor(1);
+    // Tiny square eyes
+    u8g2.drawBox(40, 15, 10, 10);
+    u8g2.drawBox(78, 15, 10, 10);
+    return;
+  }
+
+  // --- Normal Procedural Rendering ---
   int w = (int)cur.w;
   int gap = 14;
   int lx = 64 - gap / 2 - w + (int)lookX;
   int rx = 64 + gap / 2 + (int)lookX;
   
-  // Sneeze physics offset
   if (sneezeState == 1) {
-    int shake = (now / 20) % 2 == 0 ? 2 : -2;
+    int shake = (now / 20) % 2 == 0 ? 3 : -3;
     lx += shake; rx += shake;
   }
 
@@ -235,22 +276,51 @@ void renderFace(uint32_t now) {
   int y = 32 - h / 2 + (int)lookY;
 
   if (cur.closed > 0.5f) {
+    // Standard closed eyes
     u8g2.drawRBox(lx, 32, w, 3, 1);
     u8g2.drawRBox(rx, 32, w, 3, 1);
+    
+    // Improved staggered Z's
     u8g2.setFont(u8g2_font_6x12_tf);
-    int zOffset = (int)(2.5f * sinf(millis() / 400.0f));
-    u8g2.drawStr(100, 20 + zOffset, "z");
-    u8g2.drawStr(108, 11 - zOffset, "Z");
+    int z1 = (int)(2.5f * sinf(now / 300.0f));
+    int z2 = (int)(2.5f * sinf((now+300) / 300.0f));
+    int z3 = (int)(2.5f * sinf((now+600) / 300.0f));
+    u8g2.drawStr(95, 28 + z1, "z");
+    u8g2.drawStr(105, 18 + z2, "Z");
+    u8g2.drawStr(115,  8 + z3, "z");
   } else if (cur.love > 0.5f) {
-    int s = 9 + (int)(2 * sinf(millis() / 110.0f));
+    // BIGGER Heart eyes!
+    int s = 14 + (int)(3 * sinf(now / 110.0f)); 
     drawHeart(lx + w / 2, 32, s);
     drawHeart(rx + w / 2, 32, s);
   } else {
-    drawEye(lx, y, w, h, true);
-    drawEye(rx, y, w, h, false);
+    // Draw standard or hollow procedural eyes
+    drawEye(lx, y, w, h, true, special);
+    drawEye(rx, y, w, h, false, special);
+  }
+
+  // 3. THUG LIFE MODE (Overlaid)
+  if (special == 3) {
+    int dropY = (now - exprStartTime) / 10;
+    if (dropY > 20) dropY = 20;
+    
+    // Pixel sunglasses
+    u8g2.drawBox(lx - 4, dropY, w + 8, h / 2);
+    u8g2.drawBox(rx - 4, dropY, w + 8, h / 2);
+    u8g2.drawBox(lx + w, dropY + 4, rx - (lx + w), 4); // Bridge
+    
+    // Glare
+    u8g2.setDrawColor(0);
+    u8g2.drawBox(lx, dropY + 2, 4, 4);
+    u8g2.drawBox(rx, dropY + 2, 4, 4);
+    u8g2.setDrawColor(1);
+
+    if (dropY == 20) {
+       u8g2.setFont(u8g2_font_5x7_tf);
+       u8g2.drawStr(40, 60, "THUG LIFE");
+    }
   }
   
-  // Focus Mode Progress Bar & Icon
   if (isFocusMode) {
      uint32_t elapsed = now - focusStartTime;
      if (elapsed > FOCUS_DUR) elapsed = FOCUS_DUR;
@@ -280,7 +350,7 @@ void updateEngine(uint32_t now) {
     lookTY = random(-4, 5);
     nextLookAt = now + random(1200, 4000);
   }
-  float lookGain = (cur.closed < 0.5f && cur.love < 0.5f) ? 1.0f : 0.0f;
+  float lookGain = (cur.closed < 0.5f && cur.love < 0.5f && tgt.special == 0) ? 1.0f : 0.0f;
   float lookAlpha = 1.0f - powf(0.75f, dt * 25.0f);
   lookX += (lookTX * lookGain - lookX) * lookAlpha;
   lookY += (lookTY * lookGain - lookY) * lookAlpha;
@@ -290,7 +360,6 @@ void updateEngine(uint32_t now) {
     nextBlinkAt = now + random(2000, 6000);
   }
 
-  // Focus Pomodoro Timer
   if (isFocusMode) {
     if (now - focusStartTime >= FOCUS_DUR) {
       isFocusMode = false; 
@@ -299,26 +368,23 @@ void updateEngine(uint32_t now) {
       setExpr(E_HAPPY, 5000);
     }
   } else {
-    // Happiness Decay
     happiness -= dt * 0.15f; 
     if (happiness < 0) happiness = 0;
   }
 
-  // Idle Auto-Sleep 
   uint32_t idleTime = now - lastTouchAt;
   if (!isFocusMode && idleTime > 300000) { 
     if (!sleeping) {
       sleeping = true;
       setExpr(E_SLEEP);
       playMelody(sfxSleep, 2);
-      setVibe(V_BREATHE, 0); // Breathe indefinitely while sleeping
+      setVibe(V_BREATHE, 0); 
       u8g2.setPowerSave(0);
     } else if (idleTime > 600000) { 
       u8g2.setPowerSave(1);
     }
   }
 
-  // Sneeze Sequencer (Non-blocking)
   if (sneezeState == 1 && now > sneezeAt) {
     sneezeState = 0;
     setExpr(E_SAD, 1500); 
@@ -326,32 +392,25 @@ void updateEngine(uint32_t now) {
     setVibe(V_PULSE_HARD, 150);
   }
 
-  // Clear hold expression & revert to baseline
   if (exprUntil && now > exprUntil) {
     exprUntil = 0;
-    if (isFocusMode) {
-      setExpr(E_ATTENTIVE);
-    } else if (happiness < 30) {
-      setExpr(E_PLEADING); // Wants attention!
-    } else {
-      setExpr(E_NEUTRAL);
-    }
+    if (isFocusMode) setExpr(E_ATTENTIVE);
+    else if (happiness < 30) setExpr(E_PLEADING);
+    else setExpr(E_NEUTRAL);
   }
 
-  // Random Idle Events (if awake, idle, and neutral)
   if (!sleeping && !isFocusMode && (!exprUntil || now > exprUntil)) {
-    if (now - lastIdleEventAt > 20000) {
+    if (now - lastIdleEventAt > 15000) {
       int r = random(100);
       if (r < 5) {
-        // Sneeze startup
         setExpr(E_SKEPTICAL, 3000); 
-        sneezeState = 1;
-        sneezeAt = now + 800; // Build up for 800ms
+        sneezeState = 1; sneezeAt = now + 800;
+      } else if (r < 10) {
+        setExpr(E_STATIC, 1500); // Glitch out!
       } else if (r < 15) {
-        setExpr(E_SLEEPY, 3000); // Yawn
+        setExpr(E_SLEEPY, 3000); 
       } else if (r < 25) {
-        setExpr(E_MUSIC, 4000);  // Hum a tune
-        playMelody(sfxHum, 5);
+        setExpr(E_MUSIC, 4000); playMelody(sfxHum, 5);
       }
       lastIdleEventAt = now;
     }
@@ -363,25 +422,26 @@ void updateEngine(uint32_t now) {
 // ==============================================================================
 void onTap() {
   if (isFocusMode) {
-    setExpr(E_SKEPTICAL, 1500); // Quick glance, doesn't interrupt focus
+    setExpr(E_SKEPTICAL, 1500);
     return;
   }
   
-  happiness += 20.0f; // Petting!
+  happiness += 20.0f;
   if (happiness > 100.0f) happiness = 100.0f;
 
-  static const Expr reactions[] = { E_HAPPY, E_WINK, E_COOL, E_SHY, E_SURPRISED };
+  // Added the new premium expressions to the random tap reactions!
+  static const Expr reactions[] = { E_HAPPY, E_WINK, E_COOL, E_SHY, E_SURPRISED, E_MONSTER, E_THUG, E_HOLLOW, E_STATIC };
   static Expr lastReaction = E_NEUTRAL;
   Expr nextReaction;
   do {
-    nextReaction = reactions[random(0, 5)];
+    nextReaction = reactions[random(0, 9)];
   } while (nextReaction == lastReaction);
   
   lastReaction = nextReaction;
   setExpr(nextReaction, 3000); 
   
   playMelody(sfxPet, 1);
-  setVibe(V_PURR, 300); // Soft purr on pet
+  setVibe(V_PURR, 300);
 }
 
 void onDoubleTap() {
@@ -414,23 +474,13 @@ void handleTouch() {
   if (rawState != stableState) {
     if (now - stateChangeTime > 20) { 
       stableState = rawState;
-      if (stableState) { // Rising Edge (Pressed)
-        isPressed = true;
-        pressTime = now;
-        longPressHandled = false;
-        wake();
-        
-        // Haptic click
-        setVibe(V_PULSE_SOFT, 40); 
-      } else {           // Falling Edge (Released)
-        isPressed = false;
-        releaseTime = now;
-        
+      if (stableState) {
+        isPressed = true; pressTime = now; longPressHandled = false;
+        wake(); setVibe(V_PULSE_SOFT, 40); 
+      } else {
+        isPressed = false; releaseTime = now;
         if (isLoving) {
-          isLoving = false;
-          setExpr(E_NEUTRAL);
-          exprUntil = 0; 
-          setVibe(V_OFF); // Stop heartbeat
+          isLoving = false; setExpr(E_NEUTRAL); exprUntil = 0; setVibe(V_OFF);
         } else if (!longPressHandled) {
           tapCount++;
         }
@@ -440,17 +490,11 @@ void handleTouch() {
     stateChangeTime = now;
   }
 
-  // Long press -> hold to love (Disabled in focus mode)
   if (isPressed && !longPressHandled && !isFocusMode && (now - pressTime > 1200)) {
-    longPressHandled = true;
-    isLoving = true;
-    happiness = 100.0f; // Instant max happiness
-    setExpr(E_LOVE, 30000); 
-    setVibe(V_HEARTBEAT, 30000); 
-    playMelody(sfxLove, 3);
+    longPressHandled = true; isLoving = true; happiness = 100.0f;
+    setExpr(E_LOVE, 30000); setVibe(V_HEARTBEAT, 30000); playMelody(sfxLove, 3);
   }
 
-  // Process Taps
   if (!isPressed && tapCount > 0 && (now - releaseTime > 350)) {
     if (tapCount == 1) onTap();
     else if (tapCount >= 2) onDoubleTap();
@@ -458,15 +502,11 @@ void handleTouch() {
   }
 }
 
-// ==============================================================================
-// MAIN
-// ==============================================================================
 void setup() {
   Serial.begin(115200);
   pinMode(PIN_TOUCH, INPUT_PULLDOWN);
   pinMode(PIN_BUZZER, OUTPUT);
   
-  // High freq PWM for smooth, silent motor control
   analogWriteFrequency(PIN_VIBE, 20000); 
   analogWriteResolution(PIN_VIBE, 8);
   pinMode(PIN_VIBE, OUTPUT);
@@ -480,7 +520,6 @@ void setup() {
   u8g2.setBusClock(400000);
   u8g2.setFont(u8g2_font_6x12_tf);
 
-  // Boot sequence
   u8g2.clearBuffer();
   int x = (128 - u8g2.getUTF8Width("YETI V2.0")) / 2;
   u8g2.drawStr(x, 36, "YETI V2.0");
@@ -494,10 +533,7 @@ void setup() {
   tgt = PRESETS[E_NEUTRAL];
 
   uint32_t now = millis();
-  lastTouchAt   = now;
-  lastIdleEventAt = now;
-  lastFrame     = now;
-  prevUpdateTime = now;
+  lastTouchAt = now; lastIdleEventAt = now; lastFrame = now; prevUpdateTime = now;
   setExpr(E_NEUTRAL);
 }
 
