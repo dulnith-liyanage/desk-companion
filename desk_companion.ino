@@ -1,5 +1,5 @@
 /*
-  Desk Companion - Flappy Yeti & Secret Message Edition
+  Desk Companion - Polished Idle, Yeti Run & Better Focus
 */
 
 #include <Arduino.h>
@@ -30,7 +30,7 @@ enum Expr : uint8_t {
 
 struct Face { float w, h, tilt, happy, lid, love, closed, wink, squint, asym; };
 const Face PRESETS[E_COUNT] = {
-  { 30,  28,    0,     0,     0,     0,    0,    0,    0,    0 },  // neutral (Classic)
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0,    0 },  // neutral
   { 34,  32,    0,  0.8f,     0,     0,    0,    0,    0,    0 },  // happy 
   { 34,  28,-0.4f,     0,     0,     0,    0,    0,    0,    0 },  // sad 
   { 32,  24, 0.6f,     0,  0.3f,     0,    0,    0,    0,    0 },  // angry 
@@ -242,7 +242,8 @@ void renderNormal(uint32_t now) {
     u8g2.drawStr(105, 18 + z2, "Z");
     u8g2.drawStr(115,  8 + z3, "z");
   } else if (cur.love > 0.5f) {
-    int s = 18 + (int)(3 * sinf(now / 110.0f));
+    // REDUCED heart size to be much cuter
+    int s = 14 + (int)(2 * sinf(now / 120.0f));
     drawHeart(lx + wL / 2, 32 + (int)lookY, s);
     drawHeart(rx + wR / 2, 32 + (int)lookY, s);
   } else {
@@ -253,10 +254,17 @@ void renderNormal(uint32_t now) {
   if (isFocusMode) {
      uint32_t elapsed = now - focusStartTime;
      if (elapsed > FOCUS_DUR) elapsed = FOCUS_DUR;
+     int minsLeft = ((FOCUS_DUR - elapsed) / 60000) + 1;
+     if (elapsed >= FOCUS_DUR) minsLeft = 0;
+     
      int barW = (128 * elapsed) / FOCUS_DUR;
      u8g2.drawBox(0, 62, barW, 2);
-     u8g2.setFont(u8g2_font_5x7_tf);
-     u8g2.drawStr(53, 7, "FOCUS");
+     
+     // Better Focus UI
+     u8g2.setFont(u8g2_font_6x12_tf);
+     u8g2.setCursor(33, 10);
+     u8g2.print(minsLeft);
+     u8g2.print(" MINS LEFT");
   }
 }
 
@@ -290,6 +298,15 @@ void updateNormal(uint32_t now) {
   if (isFocusMode) {
     if (now - focusStartTime >= FOCUS_DUR) {
       isFocusMode = false; playMelody(sfxPomodoro, 5); setVibe(V_PULSE_HARD, 1000); setExpr(E_HAPPY, 5000);
+    } else {
+      // Dynamic Focus Expressions (Studying!)
+      if (!exprUntil || now > exprUntil) {
+         int r = random(100);
+         if (r < 20) setExpr(E_ATTENTIVE, 3000);
+         else if (r < 30) setExpr(E_SLEEPY, 1500); // Nodding off
+         else setExpr(E_DETERMINED, 5000); // Focused
+         exprUntil = now + random(3000, 7000);
+      }
     }
   } else {
     happiness -= dt * 0.15f; if (happiness < 0) happiness = 0;
@@ -310,22 +327,25 @@ void updateNormal(uint32_t now) {
 
   if (exprUntil && now > exprUntil) {
     exprUntil = 0;
-    if (isFocusMode) setExpr(E_ATTENTIVE);
+    if (isFocusMode) setExpr(E_DETERMINED);
     else if (happiness < 30) setExpr(E_PLEADING);
     else setExpr(E_NEUTRAL);
   }
 
+  // DYNAMIC IDLE STATE (Now triggers much more frequently)
   if (!sleeping && !isFocusMode && (!exprUntil || now > exprUntil)) {
-    if (now - lastIdleEventAt > 15000) {
+    if (now - lastIdleEventAt > 8000) { // Every 8 seconds instead of 15
       int r = random(100);
-      if (r < 5) {
-        setExpr(E_SKEPTICAL, 3000); sneezeState = 1; sneezeAt = now + 800;
-      } else if (r < 15) {
-        setExpr(E_SLEEPY, 3000); 
-      } else if (r < 25) {
+      if (r < 25) {
+        setExpr(E_SKEPTICAL, 3000); sneezeState = 1; sneezeAt = now + 800; // Sneeze more common
+      } else if (r < 45) {
+        setExpr(E_SLEEPY, 4000); 
+      } else if (r < 65) {
         setExpr(E_MUSIC, 4000); playMelody(sfxHum, 5);
-      } else if (r < 30) {
+      } else if (r < 85) {
         setExpr(E_CURIOUS, 3000); 
+      } else {
+        setExpr(E_SAD, 3000); // Added lonely/sad to idle
       }
       lastIdleEventAt = now;
     }
@@ -339,62 +359,49 @@ uint32_t msgStart = 0;
 bool lovePlayed = false;
 
 void onTripleTap() {
-    curMode = MODE_MESSAGE;
-    msgStart = millis();
-    lovePlayed = false;
-    setVibe(V_PULSE_HARD, 100);
+    curMode = MODE_MESSAGE; msgStart = millis(); lovePlayed = false; setVibe(V_PULSE_HARD, 100);
 }
 
 void updateMessage(uint32_t now) {
     uint32_t t = now - msgStart;
-    if (t > 8000) {
-        curMode = MODE_NORMAL;
-        setExpr(E_NEUTRAL);
-    } else if (t > 5000 && !lovePlayed) {
-        lovePlayed = true;
-        setVibe(V_HEARTBEAT, 3000);
-        playMelody(sfxLove, 3);
-    }
+    if (t > 8000) { curMode = MODE_NORMAL; setExpr(E_NEUTRAL); } 
+    else if (t > 5000 && !lovePlayed) { lovePlayed = true; setVibe(V_HEARTBEAT, 3000); playMelody(sfxLove, 3); }
 }
 
 void renderMessage(uint32_t now) {
     uint32_t t = now - msgStart;
     if (t < 1500) {
-        u8g2.setFont(u8g2_font_6x12_tf);
-        u8g2.drawStr(28, 35, "SYSTEM ERROR");
+        u8g2.setFont(u8g2_font_6x12_tf); u8g2.drawStr(28, 35, "SYSTEM ERROR");
     } else if (t < 3000) {
-        u8g2.setFont(u8g2_font_6x12_tf);
-        u8g2.drawStr(8, 35, "HEART.EXE CORRUPT");
+        u8g2.setFont(u8g2_font_6x12_tf); u8g2.drawStr(8, 35, "HEART.EXE CORRUPT");
     } else if (t < 4000) {
         for(int i=0; i<400; i++) u8g2.drawPixel(random(128), random(64));
     } else if (t < 5000) {
         // silence
     } else {
-        u8g2.setFont(u8g2_font_8x13B_tf);
-        u8g2.drawStr(22, 25, "I LOVE YOU!");
+        u8g2.setFont(u8g2_font_8x13B_tf); u8g2.drawStr(22, 25, "I LOVE YOU!");
         int bounce = (int)(abs(sin(now / 150.0f)) * 5.0f);
-        drawHeart(64, 50 - bounce, 16); 
+        drawHeart(64, 50 - bounce, 12); // Slightly smaller cute heart
     }
 }
 
 // ==============================================================================
-// GAME MODE (FLAPPY YETI)
+// GAME MODE (YETI RUN - Easier Dino Jump Game)
 // ==============================================================================
-float gy = 32, gv = 0, px = 128, pg = 32;
+float gy = 44, gv = 0, px = 128;
 int gscore = 0, gstate = 0; 
 
 void onQuadTap() {
-    curMode = MODE_GAME;
-    gstate = 0;
-    setVibe(V_PULSE_SOFT, 100);
+    curMode = MODE_GAME; gstate = 0; setVibe(V_PULSE_SOFT, 100);
 }
 
 void onGamePress() {
     if (gstate == 0) {
-        gstate = 1; gy = 32; gv = -3.5f; px = 128; gscore = 0; pg = random(20, 44);
-        playMelody(sfxPet, 1);
+        gstate = 1; gy = 44; gv = 0; px = 128; gscore = 0; playMelody(sfxPet, 1);
     } else if (gstate == 1) {
-        gv = -3.5f; playMelody(sfxPet, 1); setVibe(V_PULSE_SOFT, 30);
+        if (gy >= 44) { // Only jump if on ground (Easier!)
+            gv = -6.5f; playMelody(sfxPet, 1); setVibe(V_PULSE_SOFT, 30);
+        }
     } else if (gstate == 2) {
         gstate = 0; 
     }
@@ -406,16 +413,16 @@ void dieGame() {
 
 void updateGame(uint32_t now) {
     if (gstate == 1) {
-        gv += 0.35f; gy += gv; px -= 2.8f; 
+        gv += 0.45f; gy += gv; 
+        if (gy > 44) { gy = 44; gv = 0; } // Ground clamp
         
-        if (px < -15) {
-            px = 128; pg = random(20, 44);
-            gscore++; playMelody(sfxPoint, 2); 
-        }
+        px -= 3.5f + (gscore * 0.1f); // Speed up slightly over time
         
-        if (gy > 58 || gy < -5) dieGame();
-        if (px < 34 && px + 12 > 24) { 
-            if (gy < pg - 14 || gy + 10 > pg + 14) dieGame();
+        if (px < -10) { px = 128; gscore++; playMelody(sfxPoint, 2); }
+        
+        // Collision
+        if (px < 34 && px + 8 > 26) { 
+            if (gy + 10 > 44) dieGame();
         }
     }
 }
@@ -423,19 +430,20 @@ void updateGame(uint32_t now) {
 void renderGame(uint32_t now) {
     u8g2.setFont(u8g2_font_6x12_tf);
     if (gstate == 0) {
-        u8g2.drawStr(28, 20, "FLAPPY YETI");
+        u8g2.drawStr(35, 20, "YETI RUN");
         u8g2.drawStr(28, 40, "Tap to Jump");
         u8g2.drawStr(12, 55, "(Long Hold to Exit)");
     } else if (gstate == 1) {
+        u8g2.drawHLine(0, 56, 128); // Ground
+        
         // Cute mini yeti
-        u8g2.drawRBox(24, (int)gy, 10, 10, 2);
+        u8g2.drawRBox(24, (int)gy, 12, 12, 2);
         u8g2.setDrawColor(0);
-        u8g2.drawBox(26, (int)gy+2, 2, 3); u8g2.drawBox(30, (int)gy+2, 2, 3);
+        u8g2.drawBox(27, (int)gy+3, 2, 3); u8g2.drawBox(31, (int)gy+3, 2, 3);
         u8g2.setDrawColor(1);
         
-        // Pipes
-        u8g2.drawBox((int)px, 0, 12, (int)pg - 14);
-        u8g2.drawBox((int)px, (int)pg + 14, 12, 64);
+        // Obstacle
+        u8g2.drawBox((int)px, 44, 8, 12);
         
         u8g2.setCursor(2, 10); u8g2.print(gscore);
     } else {
@@ -502,7 +510,6 @@ void handleTouch() {
     stateChangeTime = now;
   }
 
-  // Tap evaluation for Normal / Message modes
   if (curMode != MODE_GAME && !isPressed && tapCount > 0 && (now - releaseTime > 400)) {
     if (tapCount == 1) onTap();
     else if (tapCount == 2) onDoubleTap();
@@ -511,7 +518,6 @@ void handleTouch() {
     tapCount = 0;
   }
 
-  // Long press handling
   if (isPressed && !longPressHandled && (now - pressTime > 1200)) {
     if (curMode == MODE_GAME) {
        longPressHandled = true; curMode = MODE_NORMAL; playMelody(sfxFocusOff, 3); setVibe(V_PULSE_HARD, 200);
