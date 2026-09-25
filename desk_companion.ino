@@ -502,10 +502,14 @@ void handleTouch() {
   }
 
   if (curMode != MODE_GAME && !isPressed && tapCount > 0 && (now - releaseTime > 400)) {
-    if (tapCount == 1) onTap();
-    else if (tapCount == 2) onDoubleTap();
-    else if (tapCount == 3) onTripleTap();
-    else if (tapCount >= 4) onQuadTap();
+    if (isFocusMode && tapCount != 2) {
+      // Ignore taps during focus mode to prevent distractions
+    } else {
+      if (tapCount == 1) onTap();
+      else if (tapCount == 2) onDoubleTap();
+      else if (tapCount == 3) onTripleTap();
+      else if (tapCount >= 4) onQuadTap();
+    }
     tapCount = 0;
   }
 
