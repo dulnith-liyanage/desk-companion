@@ -6,6 +6,23 @@
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <Preferences.h>
+#include <WebServer.h>
+#include <time.h>
+
+WebServer server(80);
+const long gmtOffset_sec = 19800; // UTC+5:30
+const int daylightOffset_sec = 0;
+
+int pomoWorkMins = 25;
+int pomoBreakMins = 5;
+int alarmHour = 7;
+int alarmMinute = 0;
+bool alarmEnabled = false;
+bool alarmTriggered = false;
+int lastAlarmCheckMinute = -1;
+
+String localIP = "";
+
 #include <WiFi.h>
 
 // --- WIFI CONFIGURATION ---
@@ -15,6 +32,7 @@ const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
 struct Note { int f; int d; };
 bool wifiConnected = false;
+bool wifiFailed = false;
 uint32_t lastWiFiAttempt = 0;
 
 
@@ -27,36 +45,12 @@ const int PIN_VIBE   = 10;
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 Preferences prefs;
 
-enum SystemMode { MODE_NORMAL, MODE_MESSAGE, MODE_GAME };
+enum SystemMode { MODE_NORMAL, MODE_MESSAGE, MODE_GAME, MODE_CLOCK, MODE_ALARM };
 SystemMode curMode = MODE_NORMAL;
 
 
-void updateWiFi(uint32_t now) {
-  
+void updateWiFi(uint32_t now) { /* Now handled in setup */ }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!wifiConnected) {
-      wifiConnected = true;
-      Serial.println("WiFi Connected successfully!");
-      Serial.print("IP Address: ");
-      Serial.println(WiFi.localIP());
-    }
-  } else {
-    if (wifiConnected) {
-      wifiConnected = false;
-      Serial.println("WiFi Connection Lost!");
-    }
-    // Reconnect every 15 seconds if disconnected
-    if (now - lastWiFiAttempt > 15000) {
-      lastWiFiAttempt = now;
-      Serial.println("Attempting WiFi Connection...");
-      WiFi.disconnect();
-      WiFi.mode(WIFI_STA);
-      WiFi.setSleep(false); // TROUBLESHOOTING TIP: Disable power save to prevent dropouts
-      WiFi.begin(WIFI_SSID, WIFI_PASS);
-    }
-  }
-}
 
 // ==============================================================================
 // CORE SYSTEMS & CONSTANTS
@@ -173,7 +167,8 @@ void updateVibe(uint32_t now) {
 // ==============================================================================
 bool isFocusMode = false;
 uint32_t focusStartTime = 0;
-const uint32_t FOCUS_DUR = 25 * 60 * 1000;
+uint32_t focusDur = 25 * 60 * 1000;
+bool isFocusBreak = false;
 
 float happiness = 100.0f;
 uint32_t lastIdleEventAt = 0;
@@ -292,11 +287,11 @@ void renderNormal(uint32_t now) {
   
   if (isFocusMode) {
      uint32_t elapsed = now - focusStartTime;
-     if (elapsed > FOCUS_DUR) elapsed = FOCUS_DUR;
-     int minsLeft = ((FOCUS_DUR - elapsed) / 60000) + 1;
-     if (elapsed >= FOCUS_DUR) minsLeft = 0;
+     if (elapsed > focusDur) elapsed = focusDur;
+     int minsLeft = ((focusDur - elapsed) / 60000) + 1;
+     if (elapsed >= focusDur) minsLeft = 0;
      
-     int barW = (128 * elapsed) / FOCUS_DUR;
+     int barW = (128 * elapsed) / focusDur;
      u8g2.drawBox(0, 62, barW, 2);
      
      // Better Focus UI
@@ -335,8 +330,16 @@ void updateNormal(uint32_t now) {
   }
 
   if (isFocusMode) {
-    if (now - focusStartTime >= FOCUS_DUR) {
-      isFocusMode = false; playMelody(sfxPomodoro, 5); setVibe(V_PULSE_HARD, 1000); setExpr(E_HAPPY, 5000);
+    if (now - focusStartTime >= focusDur) {
+      if (!isFocusBreak && pomoBreakMins > 0) {
+        isFocusBreak = true;
+        focusStartTime = now;
+        focusDur = pomoBreakMins * 60000;
+        playMelody(sfxPomodoro, 5); setVibe(V_PULSE_HARD, 500); setExpr(E_HAPPY, 3000);
+      } else {
+        isFocusMode = false; isFocusBreak = false;
+        playMelody(sfxWake, 3); setVibe(V_PULSE_HARD, 1000); setExpr(E_EXCITED, 5000);
+      }
     }
   } else {
     happiness -= dt * 0.15f; if (happiness < 0) happiness = 0;
@@ -389,7 +392,7 @@ uint32_t msgStart = 0;
 bool lovePlayed = false;
 
 void onTripleTap() {
-    curMode = MODE_MESSAGE; msgStart = millis(); lovePlayed = false; setVibe(V_PULSE_HARD, 100);
+    curMode = MODE_CLOCK; msgStart = millis(); setVibe(V_PULSE_SOFT, 100);
 }
 
 void updateMessage(uint32_t now) {
@@ -496,8 +499,11 @@ void onTap() {
 
 void onDoubleTap() {
   isFocusMode = !isFocusMode;
+  isFocusBreak = false;
   if (isFocusMode) {
-    focusStartTime = millis(); setExpr(E_DETERMINED, 3000); playMelody(sfxFocusOn, 3); setVibe(V_PULSE_HARD, 300); 
+    focusStartTime = millis(); 
+    focusDur = pomoWorkMins * 60000;
+    setExpr(E_DETERMINED, 3000); playMelody(sfxFocusOn, 3); setVibe(V_PULSE_HARD, 300); 
   } else {
     setExpr(E_SURPRISED, 1500); playMelody(sfxFocusOff, 3); setVibe(V_PULSE_SOFT, 150);
   }
@@ -541,8 +547,12 @@ void handleTouch() {
   }
 
   if (curMode != MODE_GAME && !isPressed && tapCount > 0 && (now - releaseTime > 400)) {
-    if (isFocusMode && tapCount != 2) {
-      // Ignore taps during focus mode to prevent distractions
+    if (curMode == MODE_ALARM) {
+      curMode = MODE_NORMAL;
+    } else if (curMode == MODE_CLOCK) {
+      curMode = MODE_NORMAL;
+    } else if (isFocusMode && tapCount != 2) {
+      // Ignore taps during focus mode
     } else {
       if (tapCount == 1) onTap();
       else if (tapCount == 2) onDoubleTap();
@@ -579,19 +589,150 @@ void drawWiFiStatus() {
   }
 }
 
+
+// ==============================================================================
+// WEB SERVER & ALARM & CLOCK LOGIC
+// ==============================================================================
+void handleRoot() {
+  String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><style>";
+  html += "body{font-family:sans-serif;background:#f4f4f9;color:#333;text-align:center;padding:20px;}";
+  html += "h1{color:#ff6b6b;} form{background:#fff;padding:20px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.1);display:inline-block;text-align:left;}";
+  html += "select, input, button {margin: 10px 0; padding: 10px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; width: 100%; box-sizing: border-box;}";
+  html += "button {background:#4ecdc4; color:white; border:none; cursor:pointer; font-weight:bold;} button:hover{background:#45b7d1;}";
+  html += "</style></head><body><h1>Yeti Settings</h1>";
+  html += "<form action='/save' method='POST'>";
+  
+  html += "<label><b>Pomodoro Timer</b></label><br>";
+  html += "<select name='pomo'>";
+  html += "<option value='25_5'" + String((pomoWorkMins==25)?" selected":"") + ">25 Min Work / 5 Min Break</option>";
+  html += "<option value='50_10'" + String((pomoWorkMins==50)?" selected":"") + ">50 Min Work / 10 Min Break</option>";
+  html += "<option value='90_30'" + String((pomoWorkMins==90)?" selected":"") + ">90 Min Work / 30 Min Break</option>";
+  html += "</select><br><br>";
+
+  html += "<label><b>Alarm Clock</b></label><br>";
+  char timeStr[10];
+  sprintf(timeStr, "%02d:%02d", alarmHour, alarmMinute);
+  html += "<input type='time' name='al_time' value='" + String(timeStr) + "'><br>";
+  
+  html += "<label style='display:flex;align-items:center;gap:10px;'><input type='checkbox' name='al_en' style='width:auto;' " + String(alarmEnabled?"checked":"") + "> Enable Alarm</label><br><br>";
+  
+  html += "<button type='submit'>Save Settings</button>";
+  html += "</form></body></html>";
+  
+  server.send(200, "text/html", html);
+}
+
+void handleSave() {
+  if (server.hasArg("pomo")) {
+    String p = server.arg("pomo");
+    if (p == "25_5") { pomoWorkMins = 25; pomoBreakMins = 5; }
+    else if (p == "50_10") { pomoWorkMins = 50; pomoBreakMins = 10; }
+    else if (p == "90_30") { pomoWorkMins = 90; pomoBreakMins = 30; }
+    prefs.putInt("pomoWork", pomoWorkMins);
+    prefs.putInt("pomoBreak", pomoBreakMins);
+  }
+  
+  if (server.hasArg("al_time")) {
+    String t = server.arg("al_time");
+    int h = t.substring(0, 2).toInt();
+    int m = t.substring(3, 5).toInt();
+    alarmHour = h;
+    alarmMinute = m;
+    prefs.putInt("alHour", h);
+    prefs.putInt("alMin", m);
+  }
+  
+  alarmEnabled = server.hasArg("al_en");
+  prefs.putBool("alEn", alarmEnabled);
+  
+  server.sendHeader("Location", "/");
+  server.send(303);
+}
+
+void renderClock(uint32_t now) {
+  u8g2.setFont(u8g2_font_8x13_tf);
+  struct tm timeinfo;
+  if (!wifiConnected || !getLocalTime(&timeinfo, 0)) {
+    int x = (128 - u8g2.getUTF8Width("No Time Sync")) / 2;
+    u8g2.drawStr(x, 30, "No Time Sync");
+  } else {
+    char tStr[16];
+    int h = timeinfo.tm_hour % 12;
+    if (h == 0) h = 12;
+    sprintf(tStr, "%02d:%02d %s", h, timeinfo.tm_min, timeinfo.tm_hour >= 12 ? "PM" : "AM");
+    int x = (128 - u8g2.getUTF8Width(tStr)) / 2;
+    u8g2.drawStr(x, 25, tStr);
+    
+    // Draw Alarm Status
+    u8g2.setFont(u8g2_font_5x7_tf);
+    char aStr[32];
+    int ah = alarmHour % 12;
+    if (ah == 0) ah = 12;
+    sprintf(aStr, "Alarm: %02d:%02d %s [%s]", ah, alarmMinute, alarmHour >= 12 ? "PM" : "AM", alarmEnabled ? "ON" : "OFF");
+    int ax = (128 - u8g2.getUTF8Width(aStr)) / 2;
+    u8g2.drawStr(ax, 50, aStr);
+  }
+}
+
+void renderAlarm(uint32_t now) {
+  if ((now / 500) % 2 == 0) {
+    u8g2.setFont(u8g2_font_8x13_tf);
+    int x = (128 - u8g2.getUTF8Width("WAKE UP!")) / 2;
+    u8g2.drawStr(x, 26, "WAKE UP!");
+    x = (128 - u8g2.getUTF8Width("(Tap to Stop)")) / 2;
+    u8g2.drawStr(x, 50, "(Tap to Stop)");
+  } else {
+    // Flash inverted
+    u8g2.setDrawColor(1);
+    u8g2.drawBox(0,0,128,64);
+    u8g2.setDrawColor(0);
+    u8g2.setFont(u8g2_font_8x13_tf);
+    int x = (128 - u8g2.getUTF8Width("WAKE UP!")) / 2;
+    u8g2.drawStr(x, 36, "WAKE UP!");
+    u8g2.setDrawColor(1);
+  }
+  if ((now / 200) % 2 == 0) {
+    playMelody(sfxWake, 1);
+    setVibe(V_PULSE_HARD, 100);
+  }
+}
+
 void setup() {
   Serial.begin(115200); pinMode(PIN_TOUCH, INPUT_PULLDOWN); pinMode(PIN_BUZZER, OUTPUT);
   analogWriteFrequency(PIN_VIBE, 20000); analogWriteResolution(PIN_VIBE, 8); pinMode(PIN_VIBE, OUTPUT); analogWrite(PIN_VIBE, 0);
   randomSeed(esp_random()); prefs.begin("deskcomp", false);
   
-  // Initial WiFi setup
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.disconnect();
-  Wire.setPins(PIN_SDA, PIN_SCL); u8g2.begin(); u8g2.setBusClock(400000); u8g2.setFont(u8g2_font_6x12_tf);
+  pomoWorkMins = prefs.getInt("pomoWork", 25);
+  pomoBreakMins = prefs.getInt("pomoBreak", 5);
+  alarmHour = prefs.getInt("alHour", 7);
+  alarmMinute = prefs.getInt("alMin", 0);
+  alarmEnabled = prefs.getBool("alEn", false);
 
+  Wire.setPins(PIN_SDA, PIN_SCL); u8g2.begin(); u8g2.setBusClock(400000); u8g2.setFont(u8g2_font_6x12_tf);
   u8g2.clearBuffer(); int x = (128 - u8g2.getUTF8Width("YETI V2.0")) / 2; u8g2.drawStr(x, 36, "YETI V2.0"); u8g2.sendBuffer();
   playMelody(sfxWake, 2); setVibe(V_PULSE_HARD, 150); delay(1000);
+
+  u8g2.clearBuffer(); u8g2.drawStr(5, 30, "Connecting Wi-Fi..."); u8g2.sendBuffer();
+  WiFi.disconnect(true); WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  
+  uint32_t startWait = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - startWait < 15000) { delay(100); }
+  
+  u8g2.clearBuffer();
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiConnected = true;
+    localIP = WiFi.localIP().toString();
+    configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org");
+    server.on("/", handleRoot);
+    server.on("/save", HTTP_POST, handleSave);
+    server.begin();
+    u8g2.drawStr(5, 20, "Connected!"); u8g2.drawStr(5, 40, "IP:"); u8g2.drawStr(5, 55, localIP.c_str());
+  } else {
+    wifiFailed = true; WiFi.mode(WIFI_OFF);
+    u8g2.drawStr(5, 30, "Offline Mode");
+  }
+  u8g2.sendBuffer(); delay(5000); // Hold for user to read IP
 
   cur = PRESETS[E_SLEEP]; tgt = PRESETS[E_NEUTRAL];
   uint32_t now = millis(); lastTouchAt = now; lastIdleEventAt = now; lastFrame = now; prevUpdateTime = now;
@@ -602,11 +743,28 @@ void loop() {
   uint32_t now = millis();
   handleTouch(); updateVibe(now); updateMelody(now);
   
+  if (wifiConnected) { server.handleClient(); }
+  
+  // Check Alarm
+  if (wifiConnected && alarmEnabled && curMode != MODE_ALARM) {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 0)) {
+      if (timeinfo.tm_hour == alarmHour && timeinfo.tm_min == alarmMinute) {
+        if (timeinfo.tm_min != lastAlarmCheckMinute) {
+          curMode = MODE_ALARM;
+          setExpr(E_SURPRISED);
+        }
+      }
+      lastAlarmCheckMinute = timeinfo.tm_min;
+    }
+  }
+  
   if (now - lastFrame >= FRAME_MS) {
     lastFrame += FRAME_MS; if (now - lastFrame > FRAME_MS * 3) lastFrame = now;
     
     if (curMode == MODE_GAME) updateGame(now);
     else if (curMode == MODE_MESSAGE) updateMessage(now);
+    else if (curMode == MODE_CLOCK || curMode == MODE_ALARM) {} // No updates needed
     else updateNormal(now);
 
     if (!sleeping || (now - lastTouchAt <= 600000) || curMode != MODE_NORMAL) {
@@ -614,11 +772,11 @@ void loop() {
       
       if (curMode == MODE_GAME) renderGame(now);
       else if (curMode == MODE_MESSAGE) renderMessage(now);
+      else if (curMode == MODE_CLOCK) renderClock(now);
+      else if (curMode == MODE_ALARM) renderAlarm(now);
       else renderNormal(now);
       
-      drawWiFiStatus(); // Draw WiFi indicator overlay
       u8g2.sendBuffer();
     } else { delay(10); }
-    updateWiFi(now);
   }
 }
