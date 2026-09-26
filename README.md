@@ -171,9 +171,9 @@ After 10 minutes of inactivity the Yeti dims the display and enters a low-power 
 |---|---|---|
 | MCU | ESP32-C3 (160MHz, 4MB flash) | — |
 | Display | SSD1306 OLED 128×64 I2C | SDA: GPIO6 · SCL: GPIO7 |
-| Touch | Capacitive touch sensor | GPIO2 |
+| Touch | Capacitive touch sensor | GPIO3 |
 | Vibration | Coin vibration motor | GPIO10 |
-| Buzzer | Passive piezo buzzer | GPIO3 |
+| Buzzer | Passive piezo buzzer | GPIO5 |
 
 **Enclosure:** Custom 3D-printed Yeti figurine
 
