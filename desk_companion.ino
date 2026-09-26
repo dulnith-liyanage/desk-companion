@@ -31,6 +31,7 @@ const char* WIFI_SSID = "YOUR_WIFI_SSID";
 const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 
 struct Note { int f; int d; };
+Note sfxBeat[] = { {150, 15}, {0, 0} };
 bool wifiConnected = false;
 bool wifiFailed = false;
 uint32_t lastWiFiAttempt = 0;
@@ -59,7 +60,7 @@ void updateWiFi(uint32_t now) { /* Now handled in setup */ }
 enum Expr : uint8_t {
   E_NEUTRAL, E_HAPPY, E_SAD, E_ANGRY, E_FRUSTRATED, E_SLEEPY, E_SURPRISED, 
   E_LOVE, E_WINK, E_SKEPTICAL, E_SHY, E_COOL, E_ATTENTIVE, E_MUSIC, 
-  E_SLEEP, E_DETERMINED, E_PLEADING, E_CURIOUS, E_EXCITED, E_COUNT
+  E_SLEEP, E_DETERMINED, E_PLEADING, E_CURIOUS, E_EXCITED, E_FIRE, E_COUNT
 };
 
 struct Face { float w, h, tilt, happy, lid, love, closed, wink, squint, asym; };
@@ -83,11 +84,13 @@ const Face PRESETS[E_COUNT] = {
   { 38,  34,-0.3f,  0.5f,     0,     0,    0,    0,    0,    0 },  // pleading
   { 34,  34,    0,     0,     0,     0,    0,    0,    0, 0.35f},  // curious 
   { 38,  38,    0,  0.4f,     0,     0,    0,    0,    0,    0 },  // excited 
+  { 30,  28,    0,     0,     0,     0,    0,    0,    0,    0 },  // fire
 };
 
 Expr     curExpr = E_NEUTRAL;
 uint32_t exprUntil = 0;
 Face     cur, tgt;
+Expr currentExpr = E_NEUTRAL;
 float    lookX = 0, lookY = 0, lookTX = 0, lookTY = 0;
 uint32_t nextLookAt = 0, blinkStart = 0, nextBlinkAt = 0;
 uint32_t lastFrame = 0, prevUpdateTime = 0;
@@ -192,6 +195,17 @@ void drawHeart(int cx, int cy, int s) {
   u8g2.drawTriangle(cx - s - 1, cy - s / 3 + 2, cx + s + 1, cy - s / 3 + 2, cx, cy + s);
 }
 
+
+void drawFireEye(int x, int y, int w, int h, bool isLeft, uint32_t now) {
+    u8g2.drawDisc(x, y + h/2 - 6, w/2);
+    int yOff1 = sin(now / 150.0 + (isLeft?0:1)) * 3;
+    int yOff2 = cos(now / 120.0 + (isLeft?0:1)) * 4;
+    int yOff3 = sin(now / 100.0 + (isLeft?1:0)) * 2;
+    u8g2.drawTriangle(x - w/2, y + h/2 - 6, x - w/4, y - h/2 + yOff1, x, y + h/2 - 6);
+    u8g2.drawTriangle(x - w/4, y + h/2 - 6, x + 2, y - h/2 - 6 + yOff2, x + w/4, y + h/2 - 6);
+    u8g2.drawTriangle(x, y + h/2 - 6, x + w/2 - 2, y - h/2 + 2 + yOff3, x + w/2, y + h/2 - 6);
+}
+
 void drawEye(int x, int y, int w, int h, bool left) {
   if (cur.squint > 0.02f) {
     int sq = (int)(cur.squint * h * 0.5f); h -= sq; y += sq / 2;
@@ -280,6 +294,9 @@ void renderNormal(uint32_t now) {
     int s = 14 + (int)(2 * sinf(now / 120.0f));
     drawHeart(lx + wL / 2, 32 + (int)lookY, s);
     drawHeart(rx + wR / 2, 32 + (int)lookY, s);
+  } else if (curExpr == E_FIRE) {
+    drawFireEye(lx, yL, wL, curHL, true, now);
+    drawFireEye(rx, yR, wR, curHR, false, now);
   } else {
     drawEye(lx, yL, wL, curHL, true);
     drawEye(rx, yR, wR, curHR, false);
@@ -392,7 +409,15 @@ uint32_t msgStart = 0;
 bool lovePlayed = false;
 
 void onTripleTap() {
-    curMode = MODE_CLOCK; msgStart = millis(); setVibe(V_PULSE_SOFT, 100);
+  isFocusMode = !isFocusMode;
+  isFocusBreak = false;
+  if (isFocusMode) {
+    focusStartTime = millis(); 
+    focusDur = pomoWorkMins * 60000;
+    setExpr(E_DETERMINED, 3000); playMelody(sfxFocusOn, 3); setVibe(V_PULSE_HARD, 300); 
+  } else {
+    setExpr(E_SURPRISED, 1500); playMelody(sfxFocusOff, 3); setVibe(V_PULSE_SOFT, 150);
+  }
 }
 
 void updateMessage(uint32_t now) {
@@ -421,6 +446,10 @@ void renderMessage(uint32_t now) {
 // ==============================================================================
 // GAME MODE (YETI RUN - Easier Dino Jump Game)
 // ==============================================================================
+bool gameButtonState = false;
+uint32_t gamePressTime = 0;
+bool gDucking = false;
+int gobjType = 0;
 float gy = 44, gv = 0, px = 128;
 int gscore = 0, gstate = 0; 
 
@@ -430,9 +459,9 @@ void onQuadTap() {
 
 void onGamePress() {
     if (gstate == 0) {
-        gstate = 1; gy = 44; gv = 0; px = 128; gscore = 0; playMelody(sfxPet, 1);
+        gstate = 1; gy = 44; gv = 0; px = 128; gscore = 0; gobjType = 0; playMelody(sfxPet, 1);
     } else if (gstate == 1) {
-        if (gy >= 44) { // Only jump if on ground (Easier!)
+        if (gy >= 44) { 
             gv = -6.5f; playMelody(sfxPet, 1); setVibe(V_PULSE_SOFT, 30);
         }
     } else if (gstate == 2) {
@@ -447,36 +476,59 @@ void dieGame() {
 void updateGame(uint32_t now) {
     if (gstate == 1) {
         gv += 0.45f; gy += gv; 
-        if (gy > 44) { gy = 44; gv = 0; } // Ground clamp
+        if (gy > 44) { gy = 44; gv = 0; }
         
-        px -= 3.5f + (gscore * 0.1f); // Speed up slightly over time
+        px -= 3.5f + (gscore * 0.1f);
+        if (px < -15) { 
+            px = 128; gscore++; playMelody(sfxPoint, 2); 
+            gobjType = random(0, 3); 
+        }
         
-        if (px < -10) { px = 128; gscore++; playMelody(sfxPoint, 2); }
+        int pTop = gy;
+        int pBot = gy + 12;
+        int pL = 24;
+        int pR = 36;
+
+        int oL = px;
+        int oR = px + (gobjType == 0 ? 10 : 14);
+        int oTop = 0, oBot = 0;
+        if (gobjType == 0) { // Cactus
+            oTop = 44; oBot = 56;
+        } else if (gobjType == 1) { // Low bird
+            oTop = 42; oBot = 50;
+        } else if (gobjType == 2) { // High bird
+            oTop = 26; oBot = 36;
+        }
         
-        // Collision
-        if (px < 34 && px + 8 > 26) { 
-            if (gy + 10 > 44) dieGame();
+        if (pR > oL && pL < oR && pBot > oTop && pTop < oBot) {
+            // Shrink hitbox slightly to be forgiving
+            if (pR-2 > oL+2 && pL+2 < oR-2 && pBot-2 > oTop+2 && pTop+2 < oBot-2) dieGame();
         }
     }
 }
-
 void renderGame(uint32_t now) {
     u8g2.setFont(u8g2_font_6x12_tf);
     if (gstate == 0) {
-        u8g2.drawStr(35, 20, "YETI RUN");
-        u8g2.drawStr(28, 40, "Tap to Jump");
-        u8g2.drawStr(12, 55, "(Long Hold to Exit)");
+        u8g2.drawStr(30, 20, "YETI RUN");
+        u8g2.drawStr(25, 42, "Tap to Jump");
+        u8g2.setFont(u8g2_font_5x7_tf);
+        u8g2.drawStr(12, 60, "(Long Hold to Exit)");
     } else if (gstate == 1) {
-        u8g2.drawHLine(0, 56, 128); // Ground
+        u8g2.drawHLine(0, 56, 128);
         
-        // Cute mini yeti
         u8g2.drawRBox(24, (int)gy, 12, 12, 2);
-        u8g2.setDrawColor(0);
-        u8g2.drawBox(27, (int)gy+3, 2, 3); u8g2.drawBox(31, (int)gy+3, 2, 3);
-        u8g2.setDrawColor(1);
+        u8g2.setDrawColor(0); u8g2.drawBox(27, (int)gy+3, 2, 3); u8g2.drawBox(31, (int)gy+3, 2, 3); u8g2.setDrawColor(1);
         
-        // Obstacle
-        u8g2.drawBox((int)px, 44, 8, 12);
+        if (gobjType == 0) {
+            u8g2.drawBox((int)px, 44, 10, 12);
+            u8g2.drawBox((int)px-3, 48, 3, 4);
+            u8g2.drawBox((int)px+10, 46, 3, 4);
+        } else {
+            int baseY = (gobjType == 1) ? 42 : 26;
+            int wingY = ((now / 150) % 2 == 0) ? (baseY - 4) : (baseY + 6);
+            u8g2.drawBox((int)px, baseY, 14, 6);
+            u8g2.drawTriangle((int)px+4, baseY+2, (int)px+10, baseY+2, (int)px+7, wingY);
+        }
         
         u8g2.setCursor(2, 10); u8g2.print(gscore);
     } else {
@@ -484,10 +536,6 @@ void renderGame(uint32_t now) {
         u8g2.setCursor(40, 45); u8g2.print("Score: "); u8g2.print(gscore);
     }
 }
-
-// ==============================================================================
-// TOUCH LOGIC
-// ==============================================================================
 void onTap() {
   happiness += 20.0f; if (happiness > 100.0f) happiness = 100.0f;
   static const Expr reactions[] = { E_HAPPY, E_WINK, E_COOL, E_SHY, E_SURPRISED, E_ANGRY, E_FRUSTRATED, E_CURIOUS, E_EXCITED };
@@ -498,15 +546,7 @@ void onTap() {
 }
 
 void onDoubleTap() {
-  isFocusMode = !isFocusMode;
-  isFocusBreak = false;
-  if (isFocusMode) {
-    focusStartTime = millis(); 
-    focusDur = pomoWorkMins * 60000;
-    setExpr(E_DETERMINED, 3000); playMelody(sfxFocusOn, 3); setVibe(V_PULSE_HARD, 300); 
-  } else {
-    setExpr(E_SURPRISED, 1500); playMelody(sfxFocusOff, 3); setVibe(V_PULSE_SOFT, 150);
-  }
+    curMode = MODE_CLOCK; msgStart = millis(); setVibe(V_PULSE_SOFT, 100);
 }
 
 void handleTouch() {
@@ -526,13 +566,14 @@ void handleTouch() {
       stableState = rawState;
       if (stableState) {
         isPressed = true; pressTime = now; longPressHandled = false; 
+        gameButtonState = true; gamePressTime = now; 
         if (curMode == MODE_GAME) {
             onGamePress();
         } else {
             wake(); setVibe(V_PULSE_SOFT, 40); 
         }
       } else {
-        isPressed = false; releaseTime = now;
+        isPressed = false; releaseTime = now; gameButtonState = false;
         if (curMode != MODE_GAME) {
             if (isLoving) {
               isLoving = false; setExpr(E_NEUTRAL); exprUntil = 0; setVibe(V_OFF);
@@ -551,7 +592,7 @@ void handleTouch() {
       curMode = MODE_NORMAL;
     } else if (curMode == MODE_CLOCK) {
       curMode = MODE_NORMAL;
-    } else if (isFocusMode && tapCount != 2) {
+    } else if (isFocusMode && tapCount != 3) {
       // Ignore taps during focus mode
     } else {
       if (tapCount == 1) onTap();
@@ -562,7 +603,7 @@ void handleTouch() {
     tapCount = 0;
   }
 
-  if (isPressed && !longPressHandled && (now - pressTime > 1200)) {
+  if (isPressed && !longPressHandled && (now - pressTime > 1500)) {
     if (curMode == MODE_GAME) {
        longPressHandled = true; curMode = MODE_NORMAL; playMelody(sfxFocusOff, 3); setVibe(V_PULSE_HARD, 200);
     } else if (curMode == MODE_NORMAL && !isFocusMode) {
@@ -650,27 +691,32 @@ void handleSave() {
 }
 
 void renderClock(uint32_t now) {
-  u8g2.setFont(u8g2_font_8x13_tf);
   struct tm timeinfo;
   if (!wifiConnected || !getLocalTime(&timeinfo, 0)) {
+    u8g2.setFont(u8g2_font_8x13_tf);
     int x = (128 - u8g2.getUTF8Width("No Time Sync")) / 2;
     u8g2.drawStr(x, 30, "No Time Sync");
   } else {
+    u8g2.setFont(u8g2_font_logisoso24_tr);
     char tStr[16];
     int h = timeinfo.tm_hour % 12;
     if (h == 0) h = 12;
-    sprintf(tStr, "%02d:%02d %s", h, timeinfo.tm_min, timeinfo.tm_hour >= 12 ? "PM" : "AM");
-    int x = (128 - u8g2.getUTF8Width(tStr)) / 2;
-    u8g2.drawStr(x, 25, tStr);
+    sprintf(tStr, "%02d:%02d", h, timeinfo.tm_min);
+    int tw = u8g2.getUTF8Width(tStr);
+    int x = (128 - tw) / 2;
+    u8g2.drawStr(x - 5, 36, tStr);
+    
+    u8g2.setFont(u8g2_font_6x12_tf);
+    u8g2.drawStr(x + tw, 36, timeinfo.tm_hour >= 12 ? "PM" : "AM");
     
     // Draw Alarm Status
     u8g2.setFont(u8g2_font_5x7_tf);
     char aStr[32];
     int ah = alarmHour % 12;
     if (ah == 0) ah = 12;
-    sprintf(aStr, "Alarm: %02d:%02d %s [%s]", ah, alarmMinute, alarmHour >= 12 ? "PM" : "AM", alarmEnabled ? "ON" : "OFF");
+    sprintf(aStr, "ALARM: %02d:%02d %s [%s]", ah, alarmMinute, alarmHour >= 12 ? "PM" : "AM", alarmEnabled ? "ON" : "OFF");
     int ax = (128 - u8g2.getUTF8Width(aStr)) / 2;
-    u8g2.drawStr(ax, 50, aStr);
+    u8g2.drawStr(ax, 58, aStr);
   }
 }
 
