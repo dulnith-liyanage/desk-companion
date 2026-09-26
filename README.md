@@ -214,6 +214,9 @@ desk_companion/
 ├── secrets.h             # Your private credentials (gitignored)
 ├── secrets.h.example     # Template — copy this to secrets.h
 ├── images/               # README photos
+│   ├── alarm_manager.jpg
+│   ├── breadboard.jpg
+│   ├── clock.jpg
 │   ├── face.jpg
 │   ├── pet.jpg
 │   ├── weather.jpg
