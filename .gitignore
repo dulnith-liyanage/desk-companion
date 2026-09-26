@@ -11,3 +11,6 @@ build/
 
 # macOS specific
 .DS_Store
+
+# Private credentials — NEVER commit this file
+secrets.h

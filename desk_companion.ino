@@ -49,8 +49,7 @@ String localIP = "";
 
 // --- WIFI CONFIGURATION ---
 // IMPORTANT: Replace these with your actual 2.4GHz WiFi credentials!
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+#include "secrets.h"
 
 struct Note { int f; int d; };
 Note sfxBeat[] = { {150, 15}, {0, 0} };
@@ -662,7 +661,7 @@ void fetchWeatherTask(void * parameter) {
     if (wifiConnected && (forceWeatherFetch || millis() - lastWeatherFetch > 900000)) { // 15 mins
       forceWeatherFetch = false;
       HTTPClient http;
-      String url = "http://api.openweathermap.org/data/2.5/weather?q=" + weatherCity + "&appid=YOUR_OWM_API_KEY&units=" + weatherUnits;
+      String url = "http://api.openweathermap.org/data/2.5/weather?q=" + weatherCity + "&appid=" + OWM_API_KEY + "&units=" + weatherUnits;
       http.begin(url);
       int httpCode = http.GET();
       if (httpCode > 0) {
@@ -1017,7 +1016,7 @@ void setup() {
 
   u8g2.clearBuffer(); u8g2.drawStr(5, 30, "Connecting Wi-Fi..."); u8g2.sendBuffer();
   WiFi.disconnect(true); WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setTxPower(WIFI_POWER_8_5dBm);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   uint32_t startWait = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - startWait < 15000) { delay(100); }
