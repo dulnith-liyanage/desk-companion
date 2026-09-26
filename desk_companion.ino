@@ -6,6 +6,8 @@
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <Preferences.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
 #include <WebServer.h>
 #include <time.h>
 
@@ -15,9 +17,25 @@ const int daylightOffset_sec = 0;
 
 int pomoWorkMins = 25;
 int pomoBreakMins = 5;
-int alarmHour = 7;
-int alarmMinute = 0;
-bool alarmEnabled = false;
+// Alarm State
+bool hideAlarm = false;
+int al1H = 7, al1M = 0; bool al1En = false;
+int al2H = 8, al2M = 0; bool al2En = false;
+int al3H = 9, al3M = 0; bool al3En = false;
+
+// Weather State
+String weatherCity = "London";
+String weatherUnits = "metric";
+int weatherTheme = 1;
+char curWeatherDesc[32] = "Loading...";
+float curTemp = 0.0;
+int curHumidity = 0;
+float curWind = 0.0;
+int alarmManagerSel = 0;
+int curWeatherId = 800;
+bool forceWeatherFetch = true;
+int clockDisplayState = 0;
+
 int pomoTheme = 0;
 int clockTheme = 0;
 String alMsg = "WAKE UP!";
@@ -50,7 +68,7 @@ const int PIN_VIBE   = 10;
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 Preferences prefs;
 
-enum SystemMode { MODE_NORMAL, MODE_MESSAGE, MODE_GAME, MODE_CLOCK, MODE_ALARM };
+enum SystemMode { MODE_NORMAL, MODE_GAME, MODE_CLOCK, MODE_ALARM };
 SystemMode curMode = MODE_NORMAL;
 
 
@@ -403,12 +421,7 @@ void updateNormal(uint32_t now) {
   }
 }
 
-// ==============================================================================
-// MESSAGE MODE
-// ==============================================================================
-uint32_t msgStart = 0;
-bool lovePlayed = false;
-
+// Triple tap: toggle Pomodoro focus mode
 void onTripleTap() {
   isFocusMode = !isFocusMode;
   isFocusBreak = false;
@@ -419,29 +432,6 @@ void onTripleTap() {
   } else {
     setExpr(E_SURPRISED, 1500); playMelody(sfxFocusOff, 3); setVibe(V_PULSE_SOFT, 150);
   }
-}
-
-void updateMessage(uint32_t now) {
-    uint32_t t = now - msgStart;
-    if (t > 8000) { curMode = MODE_NORMAL; setExpr(E_NEUTRAL); } 
-    else if (t > 5000 && !lovePlayed) { lovePlayed = true; setVibe(V_HEARTBEAT, 3000); playMelody(sfxLove, 3); }
-}
-
-void renderMessage(uint32_t now) {
-    uint32_t t = now - msgStart;
-    if (t < 1500) {
-        u8g2.setFont(u8g2_font_6x12_tf); u8g2.drawStr(28, 35, "SYSTEM ERROR");
-    } else if (t < 3000) {
-        u8g2.setFont(u8g2_font_6x12_tf); u8g2.drawStr(8, 35, "HEART.EXE CORRUPT");
-    } else if (t < 4000) {
-        for(int i=0; i<400; i++) u8g2.drawPixel(random(128), random(64));
-    } else if (t < 5000) {
-        // silence
-    } else {
-        u8g2.setFont(u8g2_font_8x13B_tf); u8g2.drawStr(22, 25, "I LOVE YOU!");
-        int bounce = (int)(abs(sin(now / 150.0f)) * 5.0f);
-        drawHeart(64, 50 - bounce, 12); // Slightly smaller cute heart
-    }
 }
 
 // ==============================================================================
@@ -547,7 +537,7 @@ void onTap() {
 }
 
 void onDoubleTap() {
-    curMode = MODE_CLOCK; msgStart = millis(); setVibe(V_PULSE_SOFT, 100);
+    curMode = MODE_CLOCK; setVibe(V_PULSE_SOFT, 100); clockDisplayState = 0;
 }
 
 void handleTouch() {
@@ -555,6 +545,7 @@ void handleTouch() {
   static bool isPressed = false;
   static int tapCount = 0;
   static bool longPressHandled = false;
+  static bool extraLongPressHandled = false;
   static bool isLoving = false; 
   static bool stableState = false;
   static uint32_t stateChangeTime = 0;
@@ -566,7 +557,7 @@ void handleTouch() {
     if (now - stateChangeTime > 20) { 
       stableState = rawState;
       if (stableState) {
-        isPressed = true; pressTime = now; longPressHandled = false; 
+        isPressed = true; pressTime = now; longPressHandled = false; extraLongPressHandled = false;
         gameButtonState = true; gamePressTime = now; 
         if (curMode == MODE_GAME) {
             onGamePress();
@@ -578,7 +569,7 @@ void handleTouch() {
         if (curMode != MODE_GAME) {
             if (isLoving) {
               isLoving = false; setExpr(E_NEUTRAL); exprUntil = 0; setVibe(V_OFF);
-            } else if (!longPressHandled) {
+            } else if (!longPressHandled && !extraLongPressHandled) {
               tapCount++;
             }
         }
@@ -591,29 +582,56 @@ void handleTouch() {
   if (curMode != MODE_GAME && !isPressed && tapCount > 0 && (now - releaseTime > 400)) {
     if (curMode == MODE_ALARM) {
       curMode = MODE_NORMAL;
-    } else if (curMode == MODE_CLOCK) {
-      curMode = MODE_NORMAL;
     } else if (isFocusMode && tapCount != 3) {
-      // Ignore taps during focus mode
+      // Ignore taps
     } else {
-      if (tapCount == 1) onTap();
-      else if (tapCount == 2) onDoubleTap();
-      else if (tapCount == 3) onTripleTap();
+      if (tapCount == 1) {
+          if (curMode == MODE_CLOCK) {
+              if (clockDisplayState == 2) alarmManagerSel = (alarmManagerSel + 1) % 3;
+              else clockDisplayState = (clockDisplayState == 0) ? 1 : 0;
+          }
+          else onTap();
+      } else if (tapCount == 2) {
+          if (curMode == MODE_CLOCK) {
+              if (clockDisplayState == 2) {
+                  if (alarmManagerSel == 0) { al1En = !al1En; prefs.putBool("al1En", al1En); }
+                  else if (alarmManagerSel == 1) { al2En = !al2En; prefs.putBool("al2En", al2En); }
+                  else if (alarmManagerSel == 2) { al3En = !al3En; prefs.putBool("al3En", al3En); }
+                  setVibe(V_PULSE_SOFT, 100);
+              } else {
+                  curMode = MODE_NORMAL;
+              }
+          }
+          else onDoubleTap();
+      } else if (tapCount == 3) onTripleTap();
       else if (tapCount >= 4) onQuadTap();
     }
     tapCount = 0;
   }
 
-  if (isPressed && !longPressHandled && (now - pressTime > 1500)) {
-    if (curMode == MODE_GAME) {
-       longPressHandled = true; curMode = MODE_NORMAL; playMelody(sfxFocusOff, 3); setVibe(V_PULSE_HARD, 200);
-    } else if (curMode == MODE_NORMAL && !isFocusMode) {
-       longPressHandled = true; isLoving = true; happiness = 100.0f;
-       setExpr(E_LOVE, 30000); setVibe(V_HEARTBEAT, 30000); playMelody(sfxLove, 3);
-    }
+  if (isPressed) {
+      uint32_t holdTime = now - pressTime;
+      if (!longPressHandled && holdTime > 1500) {
+          longPressHandled = true; // Always consume the event at 1.5s
+          if (curMode == MODE_CLOCK) {
+              if (clockDisplayState != 2) {
+                  clockDisplayState = 2; alarmManagerSel = 0; setVibe(V_PULSE_HARD, 100);
+              }
+          } else if (curMode == MODE_GAME) {
+             curMode = MODE_NORMAL; playMelody(sfxFocusOff, 3); setVibe(V_PULSE_HARD, 200);
+          } else if (curMode == MODE_NORMAL && !isFocusMode) {
+             isLoving = true; happiness = 100.0f;
+             setExpr(E_LOVE, 30000); setVibe(V_HEARTBEAT, 30000); playMelody(sfxLove, 3);
+          }
+      }
+      if (!extraLongPressHandled && holdTime > 3000) {
+          extraLongPressHandled = true; // Always consume the event at 3.0s
+          if (curMode == MODE_CLOCK && clockDisplayState == 2) {
+              clockDisplayState = 0; setVibe(V_PULSE_HARD, 300);
+          }
+      }
   }
 }
-
 
 void drawWiFiStatus() {
   
@@ -635,49 +653,110 @@ void drawWiFiStatus() {
 // ==============================================================================
 // WEB SERVER & ALARM & CLOCK LOGIC
 // ==============================================================================
+
+uint32_t lastWeatherFetch = 0;
+TaskHandle_t weatherTaskHandle;
+
+void fetchWeatherTask(void * parameter) {
+  for(;;) {
+    if (wifiConnected && (forceWeatherFetch || millis() - lastWeatherFetch > 900000)) { // 15 mins
+      forceWeatherFetch = false;
+      HTTPClient http;
+      String url = "http://api.openweathermap.org/data/2.5/weather?q=" + weatherCity + "&appid=YOUR_OWM_API_KEY&units=" + weatherUnits;
+      http.begin(url);
+      int httpCode = http.GET();
+      if (httpCode > 0) {
+        String payload = http.getString();
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, payload);
+        if (!error) {
+          curTemp = doc["main"]["temp"];
+          curHumidity = doc["main"]["humidity"];
+          curWind = doc["wind"]["speed"];
+          String desc = doc["weather"][0]["main"];
+          strlcpy(curWeatherDesc, desc.c_str(), sizeof(curWeatherDesc));
+          curWeatherId = doc["weather"][0]["id"];
+        }
+      } else {
+        strlcpy(curWeatherDesc, "Net Error", sizeof(curWeatherDesc));
+      }
+      http.end();
+      lastWeatherFetch = millis();
+    }
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+  }
+}
+
 void handleRoot() {
+
   String html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><style>";
-  html += "body{font-family:sans-serif;background:#f4f4f9;color:#333;text-align:center;padding:20px;}";
-  html += "h1{color:#ff6b6b;} form{background:#fff;padding:20px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.1);display:inline-block;text-align:left;}";
-  html += "select, input, button {margin: 10px 0; padding: 10px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; width: 100%; box-sizing: border-box;}";
+  html += "body{font-family:sans-serif;background:#f4f4f9;color:#333;text-align:center;padding:10px;}";
+  html += "h1{color:#ff6b6b;} form{background:#fff;padding:20px;border-radius:10px;box-shadow:0 4px 6px rgba(0,0,0,0.1);display:inline-block;text-align:left;max-width:400px;width:100%;}";
+  html += "select, input, button {margin: 5px 0 15px 0; padding: 10px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; width: 100%; box-sizing: border-box;}";
   html += "button {background:#4ecdc4; color:white; border:none; cursor:pointer; font-weight:bold;} button:hover{background:#45b7d1;}";
+  html += "fieldset {border:1px solid #ddd; border-radius:8px; margin-bottom:15px; padding:10px;} legend {font-weight:bold; color:#555;}";
   html += "</style></head><body><h1>Yeti Settings</h1>";
   html += "<form action='/save' method='POST'>";
   
-  html += "<label><b>Pomodoro Timer Duration</b></label><br>";
+  html += "<fieldset><legend>Timer & Clock</legend>";
+  html += "<label>Pomodoro Duration</label>";
   html += "<select name='pomo'>";
-  html += "<option value='25_5'" + String((pomoWorkMins==25)?" selected":"") + ">25 Min Work / 5 Min Break</option>";
-  html += "<option value='50_10'" + String((pomoWorkMins==50)?" selected":"") + ">50 Min Work / 10 Min Break</option>";
-  html += "<option value='90_30'" + String((pomoWorkMins==90)?" selected":"") + ">90 Min Work / 30 Min Break</option>";
-  html += "</select><br><br>";
-
-  html += "<label><b>Pomodoro Theme</b></label><br>";
+  html += "<option value='25_5'" + String((pomoWorkMins==25)?" selected":"") + ">25m Work / 5m Break</option>";
+  html += "<option value='50_10'" + String((pomoWorkMins==50)?" selected":"") + ">50m Work / 10m Break</option>";
+  html += "<option value='90_30'" + String((pomoWorkMins==90)?" selected":"") + ">90m Work / 30m Break</option>";
+  html += "</select>";
+  html += "<label>Pomodoro Theme</label>";
   html += "<select name='pomo_th'>";
   html += "<option value='0'" + String((pomoTheme==0)?" selected":"") + ">0: Cute Timer</option>";
   html += "<option value='1'" + String((pomoTheme==1)?" selected":"") + ">1: Determined Yeti</option>";
-  html += "<option value='2'" + String((pomoTheme==2)?" selected":"") + ">2: Progress Ring</option>";
-  html += "</select><br><br>";
-
-  html += "<label><b>Clock Theme</b></label><br>";
+  html += "<option value='2'" + String((pomoTheme==2)?" selected":"") + ">2: Hourglass</option>";
+  html += "</select>";
+  html += "<label>Clock Theme</label>";
   html += "<select name='clk_th'>";
   html += "<option value='0'" + String((clockTheme==0)?" selected":"") + ">0: Big Bold</option>";
   html += "<option value='1'" + String((clockTheme==1)?" selected":"") + ">1: Retro Digital</option>";
-  html += "<option value='2'" + String((clockTheme==2)?" selected":"") + ">2: Cute Analog</option>";
-  html += "</select><br><br>";
+  html += "<option value='2'" + String((clockTheme==2)?" selected":"") + ">2: Flip Clock</option>";
+  html += "</select>";
+  html += "</fieldset>";
 
-  html += "<label><b>Alarm Settings</b></label><br>";
-  char timeStr[10];
-  sprintf(timeStr, "%02d:%02d", alarmHour, alarmMinute);
-  html += "<input type='time' name='al_time' value='" + String(timeStr) + "'><br>";
-  html += "<input type='text' name='al_msg' maxlength='15' value='" + alMsg + "' placeholder='Alarm Message'><br>";
+  html += "<fieldset><legend>Weather Settings</legend>";
+  html += "<label>City Name</label>";
+  html += "<input type='text' name='w_city' value='" + weatherCity + "' placeholder='e.g. London'>";
+  html += "<label>Units</label>";
+  html += "<select name='w_units'>";
+  html += "<option value='metric'" + String((weatherUnits=="metric")?" selected":"") + ">Celsius</option>";
+  html += "<option value='imperial'" + String((weatherUnits=="imperial")?" selected":"") + ">Fahrenheit</option>";
+  html += "</select>";
+  html += "<label>Weather Theme</label>";
+  html += "<select name='w_th'>";
+  html += "<option value='0'" + String((weatherTheme==0)?" selected":"") + ">0: Minimal Text</option>";
+  html += "<option value='1'" + String((weatherTheme==1)?" selected":"") + ">1: Graphic Icon</option>";
+  html += "</select>";
+  html += "</fieldset>";
+
+  html += "<fieldset><legend>Alarms</legend>";
+  char t1[10], t2[10], t3[10];
+  sprintf(t1, "%02d:%02d", al1H, al1M); sprintf(t2, "%02d:%02d", al2H, al2M); sprintf(t3, "%02d:%02d", al3H, al3M);
   
+  html += "<label>Alarm 1</label><div style='display:flex;gap:10px;'><input type='time' name='al1_t' value='" + String(t1) + "'>";
+  html += "<label style='display:flex;align-items:center;'><input type='checkbox' name='al1_en' " + String(al1En?"checked":"") + "> On</label></div>";
+  
+  html += "<label>Alarm 2</label><div style='display:flex;gap:10px;'><input type='time' name='al2_t' value='" + String(t2) + "'>";
+  html += "<label style='display:flex;align-items:center;'><input type='checkbox' name='al2_en' " + String(al2En?"checked":"") + "> On</label></div>";
+  
+  html += "<label>Alarm 3</label><div style='display:flex;gap:10px;'><input type='time' name='al3_t' value='" + String(t3) + "'>";
+  html += "<label style='display:flex;align-items:center;'><input type='checkbox' name='al3_en' " + String(al3En?"checked":"") + "> On</label></div>";
+  
+  html += "<label>Alarm Message</label>";
+  html += "<input type='text' name='al_msg' maxlength='15' value='" + alMsg + "'>";
+  html += "<label>Alarm Sound</label>";
   html += "<select name='al_snd'>";
   html += "<option value='0'" + String((alSound==0)?" selected":"") + ">0: Standard Beep</option>";
   html += "<option value='1'" + String((alSound==1)?" selected":"") + ">1: Gentle Chime</option>";
   html += "<option value='2'" + String((alSound==2)?" selected":"") + ">2: Loud Siren</option>";
-  html += "</select><br>";
-  
-  html += "<label style='display:flex;align-items:center;gap:10px;'><input type='checkbox' name='al_en' style='width:auto;' " + String(alarmEnabled?"checked":"") + "> Enable Alarm</label><br><br>";
+  html += "</select>";
+  html += "<label style='display:flex;align-items:center;gap:10px;'><input type='checkbox' name='hide_al' style='width:auto;' " + String(hideAlarm?"checked":"") + "> Hide Alarm in Clock Mode</label>";
+  html += "</fieldset>";
   
   html += "<button type='submit'>Save Settings</button>";
   html += "</form></body></html>";
@@ -696,21 +775,28 @@ void handleSave() {
   }
   if (server.hasArg("pomo_th")) { pomoTheme = server.arg("pomo_th").toInt(); prefs.putInt("pomoThm", pomoTheme); }
   if (server.hasArg("clk_th")) { clockTheme = server.arg("clk_th").toInt(); prefs.putInt("clkThm", clockTheme); }
+  
+  if (server.hasArg("w_city")) { 
+      String newCity = server.arg("w_city");
+      String newUnits = server.arg("w_units");
+      if (newCity != weatherCity || newUnits != weatherUnits) forceWeatherFetch = true;
+      weatherCity = newCity; weatherUnits = newUnits;
+      prefs.putString("wCity", weatherCity); prefs.putString("wUnits", weatherUnits);
+  }
+  if (server.hasArg("w_th")) { weatherTheme = server.arg("w_th").toInt(); prefs.putInt("wTheme", weatherTheme); }
+
+  if (server.hasArg("al1_t")) { String t = server.arg("al1_t"); al1H = t.substring(0, 2).toInt(); al1M = t.substring(3, 5).toInt(); prefs.putInt("al1H", al1H); prefs.putInt("al1M", al1M); }
+  if (server.hasArg("al2_t")) { String t = server.arg("al2_t"); al2H = t.substring(0, 2).toInt(); al2M = t.substring(3, 5).toInt(); prefs.putInt("al2H", al2H); prefs.putInt("al2M", al2M); }
+  if (server.hasArg("al3_t")) { String t = server.arg("al3_t"); al3H = t.substring(0, 2).toInt(); al3M = t.substring(3, 5).toInt(); prefs.putInt("al3H", al3H); prefs.putInt("al3M", al3M); }
+  
+  al1En = server.hasArg("al1_en"); prefs.putBool("al1En", al1En);
+  al2En = server.hasArg("al2_en"); prefs.putBool("al2En", al2En);
+  al3En = server.hasArg("al3_en"); prefs.putBool("al3En", al3En);
+  
   if (server.hasArg("al_msg")) { alMsg = server.arg("al_msg"); prefs.putString("alMsg", alMsg); }
   if (server.hasArg("al_snd")) { alSound = server.arg("al_snd").toInt(); prefs.putInt("alSnd", alSound); }
   
-  if (server.hasArg("al_time")) {
-    String t = server.arg("al_time");
-    int h = t.substring(0, 2).toInt();
-    int m = t.substring(3, 5).toInt();
-    alarmHour = h;
-    alarmMinute = m;
-    prefs.putInt("alHour", h);
-    prefs.putInt("alMin", m);
-  }
-  
-  alarmEnabled = server.hasArg("al_en");
-  prefs.putBool("alEn", alarmEnabled);
+  hideAlarm = server.hasArg("hide_al"); prefs.putBool("hideAl", hideAlarm);
   
   server.sendHeader("Location", "/");
   server.send(303);
@@ -733,17 +819,31 @@ void renderFocus(uint32_t now) {
         char buf[8]; sprintf(buf, "%02d:%02d", (int)(secsLeft/60), (int)(secsLeft%60));
         u8g2.setFont(u8g2_font_8x13_tf);
         int w = u8g2.getUTF8Width(buf);
-        u8g2.drawStr((128-w)/2, 37, buf);
+        u8g2.drawStr((128-w)/2, 14, buf);
 
-        int cx = 64, cy = 32, r = 24, dots = 12;
-        int activeDots = 12 - (int)(12.0f * ((float)elapsed / focusDur));
-        for (int i=0; i<dots; i++) {
-            float angle = i * (PI * 2.0f / dots) - (PI / 2.0f);
-            int dx = cx + cos(angle) * r;
-            int dy = cy + sin(angle) * r;
-            if (i < activeDots) u8g2.drawDisc(dx, dy, 2);
-            else u8g2.drawCircle(dx, dy, 2);
+        int cx = 64, cy = 40, wHalf = 12, hHalf = 16;
+        u8g2.drawLine(cx - wHalf, cy - hHalf, cx + wHalf, cy - hHalf);
+        u8g2.drawLine(cx - wHalf, cy + hHalf, cx + wHalf, cy + hHalf);
+        u8g2.drawLine(cx - wHalf, cy - hHalf, cx, cy);
+        u8g2.drawLine(cx + wHalf, cy - hHalf, cx, cy);
+        u8g2.drawLine(cx - wHalf, cy + hHalf, cx, cy);
+        u8g2.drawLine(cx + wHalf, cy + hHalf, cx, cy);
+        
+        float progress = (float)elapsed / focusDur;
+        
+        int drainY = cy - hHalf + (int)(hHalf * progress);
+        for (int y = drainY; y < cy; y++) {
+            int fillW = (cy - y) * wHalf / hHalf;
+            u8g2.drawLine(cx - fillW, y, cx + fillW, y);
         }
+        
+        int fillStart = cy + hHalf - (int)(hHalf * progress);
+        for (int y = fillStart; y <= cy + hHalf; y++) {
+            int fillW = (y - cy) * wHalf / hHalf;
+            u8g2.drawLine(cx - fillW, y, cx + fillW, y);
+        }
+        
+        if (progress < 1.0f) u8g2.drawLine(cx, cy, cx, fillStart);
     }
 }
 
@@ -753,45 +853,119 @@ void renderClock(uint32_t now) {
     u8g2.setFont(u8g2_font_8x13_tf);
     int x = (128 - u8g2.getUTF8Width("No Time Sync")) / 2;
     u8g2.drawStr(x, 30, "No Time Sync");
-  } else {
-    int h = timeinfo.tm_hour % 12; if (h == 0) h = 12;
-    int m = timeinfo.tm_min;
-    
-    if (clockTheme == 0) {
-        u8g2.setFont(u8g2_font_logisoso24_tr);
-        char tStr[16]; sprintf(tStr, "%02d:%02d", h, m);
-        int tw = u8g2.getUTF8Width(tStr);
-        int x = (128 - tw) / 2;
-        u8g2.drawStr(x - 5, 36, tStr);
-        u8g2.setFont(u8g2_font_6x12_tf);
-        u8g2.drawStr(x + tw, 36, timeinfo.tm_hour >= 12 ? "PM" : "AM");
-    } else if (clockTheme == 1) {
-        u8g2.setFont(u8g2_font_freedoomr25_tn);
-        char tStr[16]; sprintf(tStr, "%02d:%02d", h, m);
-        int tw = u8g2.getUTF8Width(tStr);
-        u8g2.drawStr((128 - tw) / 2, 40, tStr);
-        u8g2.drawFrame(8, 8, 112, 44);
-        u8g2.drawFrame(10, 10, 108, 40);
-    } else if (clockTheme == 2) {
-        int cx = 64, cy = 30, r = 24;
-        u8g2.drawCircle(cx, cy, r); u8g2.drawCircle(cx, cy, r-1);
-        for(int i=0; i<12; i++) {
-            float a = i * (PI / 6.0f);
-            u8g2.drawPixel(cx + cos(a)*(r-4), cy + sin(a)*(r-4));
-        }
-        float hA = (timeinfo.tm_hour%12 + m/60.0f) * (PI * 2.0f / 12.0f) - PI/2.0f;
-        float mA = m * (PI * 2.0f / 60.0f) - PI/2.0f;
-        u8g2.drawLine(cx, cy, cx + cos(hA)*(r-12), cy + sin(hA)*(r-12));
-        u8g2.drawLine(cx+1, cy, cx+1 + cos(hA)*(r-12), cy + sin(hA)*(r-12));
-        u8g2.drawLine(cx, cy, cx + cos(mA)*(r-6), cy + sin(mA)*(r-6));
-    }
-    
-    u8g2.setFont(u8g2_font_5x7_tf);
-    char aStr[32];
-    int ah = alarmHour % 12; if (ah == 0) ah = 12;
-    sprintf(aStr, "ALARM: %02d:%02d %s [%s]", ah, alarmMinute, alarmHour >= 12 ? "PM" : "AM", alarmEnabled ? "ON" : "OFF");
-    int ax = (128 - u8g2.getUTF8Width(aStr)) / 2;
-    u8g2.drawStr(ax, 62, aStr);
+    return;
+  }
+  
+  int h = timeinfo.tm_hour % 12; if (h == 0) h = 12;
+  int m = timeinfo.tm_min;
+
+  if (clockDisplayState == 0) {
+      if (clockTheme == 0) {
+          u8g2.setFont(u8g2_font_logisoso24_tr);
+          char tStr[16]; sprintf(tStr, "%02d:%02d", h, m);
+          int tw = u8g2.getUTF8Width(tStr);
+          int x = (128 - tw) / 2;
+          u8g2.drawStr(x - 5, 42, tStr);
+          u8g2.setFont(u8g2_font_6x12_tf);
+          u8g2.drawStr(x + tw, 42, timeinfo.tm_hour >= 12 ? "PM" : "AM");
+      } else if (clockTheme == 1) {
+          u8g2.setFont(u8g2_font_freedoomr25_tn);
+          char tStr[16]; sprintf(tStr, "%02d:%02d", h, m);
+          int tw = u8g2.getUTF8Width(tStr);
+          u8g2.drawStr((128 - tw) / 2, 44, tStr);
+          u8g2.drawFrame(8, 12, 112, 44);
+          u8g2.drawFrame(10, 14, 108, 40);
+      } else if (clockTheme == 2) {
+          u8g2.setFont(u8g2_font_logisoso24_tr);
+          char hStr[8]; sprintf(hStr, "%02d", h);
+          char mStr[8]; sprintf(mStr, "%02d", m);
+          
+          u8g2.drawRBox(14, 12, 42, 40, 4);
+          u8g2.drawRBox(72, 12, 42, 40, 4);
+          
+          u8g2.setDrawColor(0);
+          int hw = u8g2.getUTF8Width(hStr);
+          u8g2.drawStr(14 + (42-hw)/2, 44, hStr);
+          int mw = u8g2.getUTF8Width(mStr);
+          u8g2.drawStr(72 + (42-mw)/2, 44, mStr);
+          
+          u8g2.setDrawColor(1);
+          u8g2.drawBox(14, 31, 42, 2);
+          u8g2.drawBox(72, 31, 42, 2);
+      }
+  } else if (clockDisplayState == 1) {
+      char tStr[16];
+      if (weatherUnits == "metric") sprintf(tStr, "%dC", (int)curTemp);
+      else sprintf(tStr, "%dF", (int)curTemp);
+      
+      u8g2.setFont(u8g2_font_logisoso24_tr);
+      int tw = u8g2.getUTF8Width(tStr);
+      u8g2.drawStr(120 - tw, 34, tStr);
+      
+      int iconX = 14, iconY = 22;
+      if (curWeatherId >= 200 && curWeatherId < 300) { 
+          // Thunderstorm
+          u8g2.drawLine(iconX+16, iconY-12, iconX+8, iconY+2);
+          u8g2.drawLine(iconX+8, iconY+2, iconX+24, iconY+2);
+          u8g2.drawLine(iconX+24, iconY+2, iconX+12, iconY+16);
+      } else if (curWeatherId >= 300 && curWeatherId < 600) {
+          // Rain
+          u8g2.drawCircle(iconX+16, iconY-4, 10);
+          u8g2.drawCircle(iconX+8, iconY+2, 6);
+          u8g2.drawCircle(iconX+24, iconY+2, 6);
+          u8g2.drawLine(iconX+12, iconY+10, iconX+8, iconY+18);
+          u8g2.drawLine(iconX+20, iconY+10, iconX+16, iconY+18);
+      } else if (curWeatherId >= 600 && curWeatherId < 700) {
+          // Snow
+          u8g2.drawLine(iconX+16, iconY-12, iconX+16, iconY+12);
+          u8g2.drawLine(iconX+4, iconY, iconX+28, iconY);
+          u8g2.drawLine(iconX+8, iconY-8, iconX+24, iconY+8);
+          u8g2.drawLine(iconX+8, iconY+8, iconX+24, iconY-8);
+      } else if (curWeatherId == 800) {
+          // Clear Sun
+          u8g2.drawCircle(iconX+16, iconY, 8);
+          u8g2.drawLine(iconX+16, iconY-12, iconX+16, iconY-16);
+          u8g2.drawLine(iconX+16, iconY+12, iconX+16, iconY+16);
+          u8g2.drawLine(iconX+4, iconY, iconX, iconY);
+          u8g2.drawLine(iconX+28, iconY, iconX+32, iconY);
+          u8g2.drawLine(iconX+6, iconY-10, iconX+4, iconY-12);
+          u8g2.drawLine(iconX+26, iconY+10, iconX+28, iconY+12);
+      } else {
+          // Clouds
+          u8g2.drawCircle(iconX+12, iconY+4, 6);
+          u8g2.drawCircle(iconX+20, iconY-2, 8);
+          u8g2.drawCircle(iconX+28, iconY+4, 6);
+          u8g2.drawLine(iconX+12, iconY+10, iconX+28, iconY+10);
+      }
+      
+      u8g2.setFont(u8g2_font_5x7_tf);
+      char w1[64]; sprintf(w1, "%s", curWeatherDesc);
+      u8g2.drawStr((128 - u8g2.getUTF8Width(w1)) / 2, 46, w1);
+      
+      char w2[64]; sprintf(w2, "Hum: %d%% | Wind: %.1f", curHumidity, curWind);
+      u8g2.drawStr((128 - u8g2.getUTF8Width(w2)) / 2, 58, w2);
+      
+  } else if (clockDisplayState == 2) {
+      u8g2.setFont(u8g2_font_8x13_tf);
+      u8g2.drawStr(38, 16, "ALARMS");
+      
+      u8g2.setFont(u8g2_font_5x7_tf);
+      u8g2.drawStr(8, 62, "[1Tap] Next [2Tap] Toggle");
+
+      int ah = (alarmManagerSel==0) ? al1H : (alarmManagerSel==1 ? al2H : al3H);
+      int am = (alarmManagerSel==0) ? al1M : (alarmManagerSel==1 ? al2M : al3M);
+      bool aEn = (alarmManagerSel==0) ? al1En : (alarmManagerSel==1 ? al2En : al3En);
+      
+      int dAh = ah % 12; if (dAh == 0) dAh = 12;
+      
+      char tStr[32]; sprintf(tStr, "ALARM %d: %02d:%02d %s", alarmManagerSel+1, dAh, am, ah >= 12 ? "PM" : "AM");
+      int tw = u8g2.getUTF8Width(tStr);
+      u8g2.drawStr((128-tw)/2, 34, tStr);
+      
+      u8g2.setFont(u8g2_font_8x13_tf);
+      char sStr[16]; sprintf(sStr, "[%s]", aEn ? "ON " : "OFF");
+      tw = u8g2.getUTF8Width(sStr);
+      u8g2.drawStr((128-tw)/2, 50, sStr);
   }
 }
 
@@ -825,9 +999,13 @@ void setup() {
   
   pomoWorkMins = prefs.getInt("pomoWork", 25);
   pomoBreakMins = prefs.getInt("pomoBreak", 5);
-  alarmHour = prefs.getInt("alHour", 7);
-  alarmMinute = prefs.getInt("alMin", 0);
-  alarmEnabled = prefs.getBool("alEn", false);
+  hideAlarm = prefs.getBool("hideAl", false);
+  al1H = prefs.getInt("al1H", 7); al1M = prefs.getInt("al1M", 0); al1En = prefs.getBool("al1En", false);
+  al2H = prefs.getInt("al2H", 8); al2M = prefs.getInt("al2M", 0); al2En = prefs.getBool("al2En", false);
+  al3H = prefs.getInt("al3H", 9); al3M = prefs.getInt("al3M", 0); al3En = prefs.getBool("al3En", false);
+  weatherCity = prefs.getString("wCity", "London");
+  weatherUnits = prefs.getString("wUnits", "metric");
+  weatherTheme = prefs.getInt("wTheme", 1);
   pomoTheme = prefs.getInt("pomoThm", 0);
   clockTheme = prefs.getInt("clkThm", 0);
   alMsg = prefs.getString("alMsg", "WAKE UP!");
@@ -862,6 +1040,15 @@ void setup() {
   cur = PRESETS[E_SLEEP]; tgt = PRESETS[E_NEUTRAL];
   uint32_t now = millis(); lastTouchAt = now; lastIdleEventAt = now; lastFrame = now; prevUpdateTime = now;
   setExpr(E_NEUTRAL);
+
+  xTaskCreate(
+    fetchWeatherTask,
+    "WeatherTask",
+    8192,
+    NULL,
+    1,
+    &weatherTaskHandle
+  );
 }
 
 void loop() {
@@ -871,14 +1058,17 @@ void loop() {
   if (wifiConnected) { server.handleClient(); }
   
   // Check Alarm
-  if (wifiConnected && alarmEnabled && curMode != MODE_ALARM) {
+  if (wifiConnected && curMode != MODE_ALARM) {
     struct tm timeinfo;
     if (getLocalTime(&timeinfo, 0)) {
-      if (timeinfo.tm_hour == alarmHour && timeinfo.tm_min == alarmMinute) {
-        if (timeinfo.tm_min != lastAlarmCheckMinute) {
+      bool trigger = false;
+      if (al1En && timeinfo.tm_hour == al1H && timeinfo.tm_min == al1M) trigger = true;
+      if (al2En && timeinfo.tm_hour == al2H && timeinfo.tm_min == al2M) trigger = true;
+      if (al3En && timeinfo.tm_hour == al3H && timeinfo.tm_min == al3M) trigger = true;
+      
+      if (trigger && timeinfo.tm_min != lastAlarmCheckMinute) {
           curMode = MODE_ALARM;
           setExpr(E_SURPRISED);
-        }
       }
       lastAlarmCheckMinute = timeinfo.tm_min;
     }
@@ -888,7 +1078,6 @@ void loop() {
     lastFrame += FRAME_MS; if (now - lastFrame > FRAME_MS * 3) lastFrame = now;
     
     if (curMode == MODE_GAME) updateGame(now);
-    else if (curMode == MODE_MESSAGE) updateMessage(now);
     else if (curMode == MODE_CLOCK || curMode == MODE_ALARM) {} // No updates needed
     else updateNormal(now);
 
@@ -896,7 +1085,6 @@ void loop() {
       u8g2.clearBuffer(); u8g2.setDrawColor(1); 
       
       if (curMode == MODE_GAME) renderGame(now);
-      else if (curMode == MODE_MESSAGE) renderMessage(now);
       else if (curMode == MODE_CLOCK) renderClock(now);
       else if (curMode == MODE_ALARM) renderAlarm(now);
       else if (isFocusMode && pomoTheme != 1) renderFocus(now);
