@@ -72,6 +72,10 @@ Displays the current time. Three selectable themes:
 - **Retro Digital** — blocky font inside a double-frame pixel border
 - **Flip Clock** — split-panel mechanical flip-clock style with inverted digit tiles
 
+<p align="center">
+  <img src="images/clock.jpg" width="55%" alt="Clock mode showing 02:26 PM in Big Bold theme"/>
+</p>
+
 ### 🌤️ Weather Dashboard
 Full-screen live weather fetched from [OpenWeatherMap](https://openweathermap.org/) every 15 minutes via a background FreeRTOS task (never blocks the Yeti's face):
 - Large pixel-art condition icon: ☀️ Sunny · ☁️ Cloudy · 🌧️ Rain · ❄️ Snow · ⛈️ Thunderstorm
@@ -83,6 +87,10 @@ Long-press to enter. Manage up to 3 alarms directly on the Yeti — no phone nee
 - **Single Tap** — scroll through Alarm 1 → 2 → 3
 - **Double Tap** — toggle the selected alarm ON/OFF (saved instantly to flash memory)
 - **Extra-long press** — return to Clock
+
+<p align="center">
+  <img src="images/alarm_manager.jpg" width="55%" alt="Alarm Manager screen showing Alarm 1 at 07:00 AM toggled ON"/>
+</p>
 
 ---
 
@@ -154,6 +162,10 @@ After 10 minutes of inactivity the Yeti dims the display and enters a low-power 
 ---
 
 ## 🔧 Hardware
+
+<p align="center">
+  <img src="images/breadboard.jpg" width="80%" alt="Breadboard prototype — ESP32-C3, touch sensor, OLED, buzzer, and vibration motor"/>
+</p>
 
 | Component | Detail | Pin |
 |---|---|---|
