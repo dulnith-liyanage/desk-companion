@@ -6,6 +6,17 @@
 #include <Wire.h>
 #include <U8g2lib.h>
 #include <Preferences.h>
+#include <WiFi.h>
+
+// --- WIFI CONFIGURATION ---
+// IMPORTANT: Replace these with your actual 2.4GHz WiFi credentials!
+const char* WIFI_SSID = "YOUR_WIFI_SSID";
+const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+
+struct Note { int f; int d; };
+bool wifiConnected = false;
+uint32_t lastWiFiAttempt = 0;
+
 
 const int PIN_SDA   = 8;
 const int PIN_SCL   = 9;
@@ -19,9 +30,38 @@ Preferences prefs;
 enum SystemMode { MODE_NORMAL, MODE_MESSAGE, MODE_GAME };
 SystemMode curMode = MODE_NORMAL;
 
+
+void updateWiFi(uint32_t now) {
+  
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!wifiConnected) {
+      wifiConnected = true;
+      Serial.println("WiFi Connected successfully!");
+      Serial.print("IP Address: ");
+      Serial.println(WiFi.localIP());
+    }
+  } else {
+    if (wifiConnected) {
+      wifiConnected = false;
+      Serial.println("WiFi Connection Lost!");
+    }
+    // Reconnect every 15 seconds if disconnected
+    if (now - lastWiFiAttempt > 15000) {
+      lastWiFiAttempt = now;
+      Serial.println("Attempting WiFi Connection...");
+      WiFi.disconnect();
+      WiFi.mode(WIFI_STA);
+      WiFi.setSleep(false); // TROUBLESHOOTING TIP: Disable power save to prevent dropouts
+      WiFi.begin(WIFI_SSID, WIFI_PASS);
+    }
+  }
+}
+
 // ==============================================================================
 // CORE SYSTEMS & CONSTANTS
 // ==============================================================================
+
 enum Expr : uint8_t {
   E_NEUTRAL, E_HAPPY, E_SAD, E_ANGRY, E_FRUSTRATED, E_SLEEPY, E_SURPRISED, 
   E_LOVE, E_WINK, E_SKEPTICAL, E_SHY, E_COOL, E_ATTENTIVE, E_MUSIC, 
@@ -65,7 +105,6 @@ const uint32_t FRAME_MS = 33;
 // ==============================================================================
 // PREMIUM AUDIO ENGINE
 // ==============================================================================
-struct Note { int f; int d; };
 Note* curMelody = nullptr;
 int melodyLen = 0, melodyIdx = 0;
 uint32_t noteEndTime = 0;
@@ -523,10 +562,32 @@ void handleTouch() {
   }
 }
 
+
+void drawWiFiStatus() {
+  
+  
+  if (wifiConnected) {
+    // Draw 3 signal bars
+    u8g2.drawBox(116, 6, 2, 2);
+    u8g2.drawBox(119, 4, 2, 4);
+    u8g2.drawBox(122, 2, 2, 6);
+  } else {
+    // Draw a blinking dot while connecting
+    if (millis() % 1000 < 500) {
+      u8g2.drawBox(122, 6, 2, 2);
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200); pinMode(PIN_TOUCH, INPUT_PULLDOWN); pinMode(PIN_BUZZER, OUTPUT);
   analogWriteFrequency(PIN_VIBE, 20000); analogWriteResolution(PIN_VIBE, 8); pinMode(PIN_VIBE, OUTPUT); analogWrite(PIN_VIBE, 0);
   randomSeed(esp_random()); prefs.begin("deskcomp", false);
+  
+  // Initial WiFi setup
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.disconnect();
   Wire.setPins(PIN_SDA, PIN_SCL); u8g2.begin(); u8g2.setBusClock(400000); u8g2.setFont(u8g2_font_6x12_tf);
 
   u8g2.clearBuffer(); int x = (128 - u8g2.getUTF8Width("YETI V2.0")) / 2; u8g2.drawStr(x, 36, "YETI V2.0"); u8g2.sendBuffer();
@@ -555,7 +616,9 @@ void loop() {
       else if (curMode == MODE_MESSAGE) renderMessage(now);
       else renderNormal(now);
       
+      drawWiFiStatus(); // Draw WiFi indicator overlay
       u8g2.sendBuffer();
     } else { delay(10); }
+    updateWiFi(now);
   }
 }
