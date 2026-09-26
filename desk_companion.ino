@@ -18,6 +18,10 @@ int pomoBreakMins = 5;
 int alarmHour = 7;
 int alarmMinute = 0;
 bool alarmEnabled = false;
+int pomoTheme = 0;
+int clockTheme = 0;
+String alMsg = "WAKE UP!";
+int alSound = 0;
 bool alarmTriggered = false;
 int lastAlarmCheckMinute = -1;
 
@@ -130,6 +134,8 @@ Note sfxSleep[]    = {{800, 150}, {600, 200}};
 Note sfxPomodoro[] = {{1000, 150}, {0, 50}, {1500, 150}, {0, 50}, {2000, 400}};
 Note sfxHum[]      = {{600, 200}, {650, 200}, {800, 400}, {0, 100}, {650, 400}};
 Note sfxSneeze[]   = {{2000, 80}, {1500, 100}};
+Note sfxChime[] = { {440, 200}, {554, 200}, {659, 400}, {0, 0} };
+Note sfxSiren[] = { {880, 100}, {1108, 100}, {880, 100}, {1108, 100}, {0, 0} };
 Note sfxPet[]      = {{1500, 50}};
 Note sfxLove[]     = {{800, 100}, {1200, 100}, {1600, 200}};
 Note sfxPoint[]    = {{1200, 50}, {1800, 80}};
@@ -302,20 +308,15 @@ void renderNormal(uint32_t now) {
     drawEye(rx, yR, wR, curHR, false);
   }
   
-  if (isFocusMode) {
+  if (isFocusMode && pomoTheme == 1) {
      uint32_t elapsed = now - focusStartTime;
      if (elapsed > focusDur) elapsed = focusDur;
-     int minsLeft = ((focusDur - elapsed) / 60000) + 1;
-     if (elapsed >= focusDur) minsLeft = 0;
-     
-     int barW = (128 * elapsed) / focusDur;
-     u8g2.drawBox(0, 62, barW, 2);
-     
-     // Better Focus UI
-     u8g2.setFont(u8g2_font_6x12_tf);
-     u8g2.setCursor(33, 10);
-     u8g2.print(minsLeft);
-     u8g2.print(" MINS LEFT");
+     long secsLeft = (focusDur - elapsed) / 1000;
+     char buf[16];
+     sprintf(buf, "%02d:%02d LEFT", (int)(secsLeft/60), (int)(secsLeft%60));
+     u8g2.setFont(u8g2_font_5x7_tf);
+     int w = u8g2.getUTF8Width(buf);
+     u8g2.drawStr((128-w)/2, 10, buf);
   }
 }
 
@@ -643,17 +644,38 @@ void handleRoot() {
   html += "</style></head><body><h1>Yeti Settings</h1>";
   html += "<form action='/save' method='POST'>";
   
-  html += "<label><b>Pomodoro Timer</b></label><br>";
+  html += "<label><b>Pomodoro Timer Duration</b></label><br>";
   html += "<select name='pomo'>";
   html += "<option value='25_5'" + String((pomoWorkMins==25)?" selected":"") + ">25 Min Work / 5 Min Break</option>";
   html += "<option value='50_10'" + String((pomoWorkMins==50)?" selected":"") + ">50 Min Work / 10 Min Break</option>";
   html += "<option value='90_30'" + String((pomoWorkMins==90)?" selected":"") + ">90 Min Work / 30 Min Break</option>";
   html += "</select><br><br>";
 
-  html += "<label><b>Alarm Clock</b></label><br>";
+  html += "<label><b>Pomodoro Theme</b></label><br>";
+  html += "<select name='pomo_th'>";
+  html += "<option value='0'" + String((pomoTheme==0)?" selected":"") + ">0: Cute Timer</option>";
+  html += "<option value='1'" + String((pomoTheme==1)?" selected":"") + ">1: Determined Yeti</option>";
+  html += "<option value='2'" + String((pomoTheme==2)?" selected":"") + ">2: Progress Ring</option>";
+  html += "</select><br><br>";
+
+  html += "<label><b>Clock Theme</b></label><br>";
+  html += "<select name='clk_th'>";
+  html += "<option value='0'" + String((clockTheme==0)?" selected":"") + ">0: Big Bold</option>";
+  html += "<option value='1'" + String((clockTheme==1)?" selected":"") + ">1: Retro Digital</option>";
+  html += "<option value='2'" + String((clockTheme==2)?" selected":"") + ">2: Cute Analog</option>";
+  html += "</select><br><br>";
+
+  html += "<label><b>Alarm Settings</b></label><br>";
   char timeStr[10];
   sprintf(timeStr, "%02d:%02d", alarmHour, alarmMinute);
   html += "<input type='time' name='al_time' value='" + String(timeStr) + "'><br>";
+  html += "<input type='text' name='al_msg' maxlength='15' value='" + alMsg + "' placeholder='Alarm Message'><br>";
+  
+  html += "<select name='al_snd'>";
+  html += "<option value='0'" + String((alSound==0)?" selected":"") + ">0: Standard Beep</option>";
+  html += "<option value='1'" + String((alSound==1)?" selected":"") + ">1: Gentle Chime</option>";
+  html += "<option value='2'" + String((alSound==2)?" selected":"") + ">2: Loud Siren</option>";
+  html += "</select><br>";
   
   html += "<label style='display:flex;align-items:center;gap:10px;'><input type='checkbox' name='al_en' style='width:auto;' " + String(alarmEnabled?"checked":"") + "> Enable Alarm</label><br><br>";
   
@@ -672,6 +694,10 @@ void handleSave() {
     prefs.putInt("pomoWork", pomoWorkMins);
     prefs.putInt("pomoBreak", pomoBreakMins);
   }
+  if (server.hasArg("pomo_th")) { pomoTheme = server.arg("pomo_th").toInt(); prefs.putInt("pomoThm", pomoTheme); }
+  if (server.hasArg("clk_th")) { clockTheme = server.arg("clk_th").toInt(); prefs.putInt("clkThm", clockTheme); }
+  if (server.hasArg("al_msg")) { alMsg = server.arg("al_msg"); prefs.putString("alMsg", alMsg); }
+  if (server.hasArg("al_snd")) { alSound = server.arg("al_snd").toInt(); prefs.putInt("alSnd", alSound); }
   
   if (server.hasArg("al_time")) {
     String t = server.arg("al_time");
@@ -690,6 +716,37 @@ void handleSave() {
   server.send(303);
 }
 
+void renderFocus(uint32_t now) {
+    uint32_t elapsed = now - focusStartTime;
+    if (elapsed > focusDur) elapsed = focusDur;
+    long secsLeft = (focusDur - elapsed) / 1000;
+    
+    if (pomoTheme == 0) {
+        u8g2.setFont(u8g2_font_logisoso24_tr);
+        char buf[8]; sprintf(buf, "%02d:%02d", (int)(secsLeft/60), (int)(secsLeft%60));
+        int w = u8g2.getUTF8Width(buf);
+        u8g2.drawStr((128-w)/2, 40, buf);
+        
+        int s = (sin(now / 150.0) + 1.0) * 1.5 + 2;
+        drawHeart(64, 55, s);
+    } else if (pomoTheme == 2) {
+        char buf[8]; sprintf(buf, "%02d:%02d", (int)(secsLeft/60), (int)(secsLeft%60));
+        u8g2.setFont(u8g2_font_8x13_tf);
+        int w = u8g2.getUTF8Width(buf);
+        u8g2.drawStr((128-w)/2, 37, buf);
+
+        int cx = 64, cy = 32, r = 24, dots = 12;
+        int activeDots = 12 - (int)(12.0f * ((float)elapsed / focusDur));
+        for (int i=0; i<dots; i++) {
+            float angle = i * (PI * 2.0f / dots) - (PI / 2.0f);
+            int dx = cx + cos(angle) * r;
+            int dy = cy + sin(angle) * r;
+            if (i < activeDots) u8g2.drawDisc(dx, dy, 2);
+            else u8g2.drawCircle(dx, dy, 2);
+        }
+    }
+}
+
 void renderClock(uint32_t now) {
   struct tm timeinfo;
   if (!wifiConnected || !getLocalTime(&timeinfo, 0)) {
@@ -697,52 +754,70 @@ void renderClock(uint32_t now) {
     int x = (128 - u8g2.getUTF8Width("No Time Sync")) / 2;
     u8g2.drawStr(x, 30, "No Time Sync");
   } else {
-    u8g2.setFont(u8g2_font_logisoso24_tr);
-    char tStr[16];
-    int h = timeinfo.tm_hour % 12;
-    if (h == 0) h = 12;
-    sprintf(tStr, "%02d:%02d", h, timeinfo.tm_min);
-    int tw = u8g2.getUTF8Width(tStr);
-    int x = (128 - tw) / 2;
-    u8g2.drawStr(x - 5, 36, tStr);
+    int h = timeinfo.tm_hour % 12; if (h == 0) h = 12;
+    int m = timeinfo.tm_min;
     
-    u8g2.setFont(u8g2_font_6x12_tf);
-    u8g2.drawStr(x + tw, 36, timeinfo.tm_hour >= 12 ? "PM" : "AM");
+    if (clockTheme == 0) {
+        u8g2.setFont(u8g2_font_logisoso24_tr);
+        char tStr[16]; sprintf(tStr, "%02d:%02d", h, m);
+        int tw = u8g2.getUTF8Width(tStr);
+        int x = (128 - tw) / 2;
+        u8g2.drawStr(x - 5, 36, tStr);
+        u8g2.setFont(u8g2_font_6x12_tf);
+        u8g2.drawStr(x + tw, 36, timeinfo.tm_hour >= 12 ? "PM" : "AM");
+    } else if (clockTheme == 1) {
+        u8g2.setFont(u8g2_font_freedoomr25_tn);
+        char tStr[16]; sprintf(tStr, "%02d:%02d", h, m);
+        int tw = u8g2.getUTF8Width(tStr);
+        u8g2.drawStr((128 - tw) / 2, 40, tStr);
+        u8g2.drawFrame(8, 8, 112, 44);
+        u8g2.drawFrame(10, 10, 108, 40);
+    } else if (clockTheme == 2) {
+        int cx = 64, cy = 30, r = 24;
+        u8g2.drawCircle(cx, cy, r); u8g2.drawCircle(cx, cy, r-1);
+        for(int i=0; i<12; i++) {
+            float a = i * (PI / 6.0f);
+            u8g2.drawPixel(cx + cos(a)*(r-4), cy + sin(a)*(r-4));
+        }
+        float hA = (timeinfo.tm_hour%12 + m/60.0f) * (PI * 2.0f / 12.0f) - PI/2.0f;
+        float mA = m * (PI * 2.0f / 60.0f) - PI/2.0f;
+        u8g2.drawLine(cx, cy, cx + cos(hA)*(r-12), cy + sin(hA)*(r-12));
+        u8g2.drawLine(cx+1, cy, cx+1 + cos(hA)*(r-12), cy + sin(hA)*(r-12));
+        u8g2.drawLine(cx, cy, cx + cos(mA)*(r-6), cy + sin(mA)*(r-6));
+    }
     
-    // Draw Alarm Status
     u8g2.setFont(u8g2_font_5x7_tf);
     char aStr[32];
-    int ah = alarmHour % 12;
-    if (ah == 0) ah = 12;
+    int ah = alarmHour % 12; if (ah == 0) ah = 12;
     sprintf(aStr, "ALARM: %02d:%02d %s [%s]", ah, alarmMinute, alarmHour >= 12 ? "PM" : "AM", alarmEnabled ? "ON" : "OFF");
     int ax = (128 - u8g2.getUTF8Width(aStr)) / 2;
-    u8g2.drawStr(ax, 58, aStr);
+    u8g2.drawStr(ax, 62, aStr);
   }
 }
 
 void renderAlarm(uint32_t now) {
   if ((now / 500) % 2 == 0) {
     u8g2.setFont(u8g2_font_8x13_tf);
-    int x = (128 - u8g2.getUTF8Width("WAKE UP!")) / 2;
-    u8g2.drawStr(x, 26, "WAKE UP!");
+    int x = (128 - u8g2.getUTF8Width(alMsg.c_str())) / 2;
+    u8g2.drawStr(x, 26, alMsg.c_str());
     x = (128 - u8g2.getUTF8Width("(Tap to Stop)")) / 2;
     u8g2.drawStr(x, 50, "(Tap to Stop)");
   } else {
-    // Flash inverted
     u8g2.setDrawColor(1);
     u8g2.drawBox(0,0,128,64);
     u8g2.setDrawColor(0);
     u8g2.setFont(u8g2_font_8x13_tf);
-    int x = (128 - u8g2.getUTF8Width("WAKE UP!")) / 2;
-    u8g2.drawStr(x, 36, "WAKE UP!");
+    int x = (128 - u8g2.getUTF8Width(alMsg.c_str())) / 2;
+    u8g2.drawStr(x, 36, alMsg.c_str());
     u8g2.setDrawColor(1);
   }
   if ((now / 200) % 2 == 0) {
-    playMelody(sfxWake, 1);
+    if (alSound == 0) playMelody(sfxWake, 1);
+    else if (alSound == 1) playMelody(sfxChime, 1);
+    else if (alSound == 2) playMelody(sfxSiren, 1);
     setVibe(V_PULSE_HARD, 100);
   }
 }
-
 void setup() {
   Serial.begin(115200); pinMode(PIN_TOUCH, INPUT_PULLDOWN); pinMode(PIN_BUZZER, OUTPUT);
   analogWriteFrequency(PIN_VIBE, 20000); analogWriteResolution(PIN_VIBE, 8); pinMode(PIN_VIBE, OUTPUT); analogWrite(PIN_VIBE, 0);
@@ -753,6 +828,10 @@ void setup() {
   alarmHour = prefs.getInt("alHour", 7);
   alarmMinute = prefs.getInt("alMin", 0);
   alarmEnabled = prefs.getBool("alEn", false);
+  pomoTheme = prefs.getInt("pomoThm", 0);
+  clockTheme = prefs.getInt("clkThm", 0);
+  alMsg = prefs.getString("alMsg", "WAKE UP!");
+  alSound = prefs.getInt("alSnd", 0);
 
   Wire.setPins(PIN_SDA, PIN_SCL); u8g2.begin(); u8g2.setBusClock(400000); u8g2.setFont(u8g2_font_6x12_tf);
   u8g2.clearBuffer(); int x = (128 - u8g2.getUTF8Width("YETI V2.0")) / 2; u8g2.drawStr(x, 36, "YETI V2.0"); u8g2.sendBuffer();
@@ -820,6 +899,7 @@ void loop() {
       else if (curMode == MODE_MESSAGE) renderMessage(now);
       else if (curMode == MODE_CLOCK) renderClock(now);
       else if (curMode == MODE_ALARM) renderAlarm(now);
+      else if (isFocusMode && pomoTheme != 1) renderFocus(now);
       else renderNormal(now);
       
       u8g2.sendBuffer();
